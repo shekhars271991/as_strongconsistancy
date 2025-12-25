@@ -25,6 +25,8 @@ from aerospike_helpers.operations import operations as ops
 import time
 import sys
 import os
+import subprocess
+import shutil
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -81,6 +83,369 @@ def wait_for_user(message="Press Enter to continue..."):
     except KeyboardInterrupt:
         print(f"\n{Colors.YELLOW}Tutorial interrupted by user.{Colors.ENDC}")
         raise SystemExit(0)
+
+# =============================================================================
+# INTERACTIVE MENU SYSTEM
+# =============================================================================
+
+def detect_aerolab_container():
+    """Detect running AeroLab container name."""
+    try:
+        result = subprocess.run(
+            ['docker', 'ps', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=5
+        )
+        for name in result.stdout.strip().split('\n'):
+            if name.startswith('aerolab-'):
+                return name
+    except Exception:
+        pass
+    return None
+
+def open_aql_shell(container_name=None, namespace='test'):
+    """Open an AQL shell for the user."""
+    if container_name is None:
+        container_name = detect_aerolab_container()
+    
+    if container_name:
+        print(f"\n{Colors.CYAN}{'='*60}{Colors.ENDC}")
+        print(f"{Colors.CYAN}Opening AQL shell in container: {container_name}{Colors.ENDC}")
+        print(f"{Colors.DIM}Type 'exit' or press Ctrl+D to return to tutorial{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'='*60}{Colors.ENDC}\n")
+        
+        try:
+            # Use -Uadmin with no password for default AeroLab setup
+            subprocess.run(
+                ['docker', 'exec', '-it', container_name, 'aql'],
+                check=False
+            )
+        except KeyboardInterrupt:
+            pass
+        print(f"\n{Colors.GREEN}Returned to tutorial.{Colors.ENDC}")
+    else:
+        print_warning("No AeroLab container detected. Try manually:")
+        print_code("docker exec -it <container_name> aql")
+        print_info("List containers with: docker ps")
+
+def open_asadm_shell(container_name=None):
+    """Open an ASADM shell for the user."""
+    if container_name is None:
+        container_name = detect_aerolab_container()
+    
+    if container_name:
+        print(f"\n{Colors.CYAN}{'='*60}{Colors.ENDC}")
+        print(f"{Colors.CYAN}Opening ASADM shell in container: {container_name}{Colors.ENDC}")
+        print(f"{Colors.DIM}Type 'exit' or press Ctrl+D to return to tutorial{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'='*60}{Colors.ENDC}\n")
+        
+        try:
+            subprocess.run(
+                ['docker', 'exec', '-it', container_name, 'asadm'],
+                check=False
+            )
+        except KeyboardInterrupt:
+            pass
+        print(f"\n{Colors.GREEN}Returned to tutorial.{Colors.ENDC}")
+    else:
+        print_warning("No AeroLab container detected. Try manually:")
+        print_code("docker exec -it <container_name> asadm")
+        print_info("List containers with: docker ps")
+
+def run_asinfo_command(container_name, command):
+    """Run an asinfo command and return output."""
+    if container_name is None:
+        container_name = detect_aerolab_container()
+    
+    if container_name:
+        try:
+            result = subprocess.run(
+                ['docker', 'exec', container_name, 'asinfo', '-v', command],
+                capture_output=True, text=True, timeout=10
+            )
+            return result.stdout.strip()
+        except Exception as e:
+            return f"Error: {e}"
+    return "No container detected"
+
+def show_suggested_commands(lesson_name):
+    """Display extensive suggested commands for the current lesson, split by shell type."""
+    
+    # Comprehensive commands organized by lesson stage
+    commands = {
+        'aerolab': {
+            'title': '🔧 SETUP & VERIFICATION',
+            'terminal': [
+                ("List all AeroLab clusters", "aerolab cluster list"),
+                ("Check container status", "docker ps --filter 'name=aerolab'"),
+                ("View recent logs", "docker logs aerolab-mydc_1 --tail 100"),
+                ("Follow logs in real-time", "docker logs -f aerolab-mydc_1"),
+                ("Check container resources", "docker stats aerolab-mydc_1 --no-stream"),
+            ],
+            'aql': [
+                ("List all namespaces", "SHOW NAMESPACES"),
+                ("List all sets", "SHOW SETS"),
+                ("Check bins in a set", "SHOW BINS test"),
+            ],
+            'asadm': [
+                ("Cluster overview", "info"),
+                ("Detailed cluster info", "info network"),
+                ("Show all namespaces", "show config namespace"),
+                ("Verify SC is enabled", "show config namespace like strong"),
+                ("Check roster status", "show roster"),
+                ("View node IDs", "info node"),
+            ],
+        },
+        'configuration': {
+            'title': '⚙️ SC CONFIGURATION COMMANDS',
+            'aql': [
+                ("List namespaces", "SHOW NAMESPACES"),
+                ("Show sets in namespace", "SHOW SETS"),
+                ("Show index info", "SHOW INDEXES test"),
+            ],
+            'asadm': [
+                ("─── ROSTER MANAGEMENT ───", ""),
+                ("View current roster", "show roster"),
+                ("Stage observed nodes to roster", "manage roster stage observed ns test"),
+                ("Apply roster changes", "manage recluster"),
+                ("─── NAMESPACE CONFIG ───", ""),
+                ("Show all namespace config", "show config namespace"),
+                ("Show SC-specific settings", "show config namespace like strong"),
+                ("Show replication factor", "show config namespace like replication"),
+                ("Show TTL settings", "show config namespace like ttl"),
+                ("─── CLUSTER INFO ───", ""),
+                ("View cluster size", "info"),
+                ("Show node details", "info node"),
+                ("Check cluster stability", "info network"),
+            ],
+        },
+        'basic_ops': {
+            'title': '📝 BASIC CRUD OPERATIONS',
+            'aql': [
+                ("─── INSERT RECORDS ───", ""),
+                ("Insert simple record", "INSERT INTO test (PK, name, age) VALUES ('user1', 'Alice', 30)"),
+                ("Insert with multiple bins", "INSERT INTO test (PK, city, score, active) VALUES ('user2', 'NYC', 95.5, true)"),
+                ("Insert with list", "INSERT INTO test (PK, tags) VALUES ('user3', JSON('[\"a\",\"b\",\"c\"]'))"),
+                ("Insert with map", "INSERT INTO test (PK, data) VALUES ('user4', JSON('{\"x\":1,\"y\":2}'))"),
+                ("─── READ RECORDS ───", ""),
+                ("Read a record", "SELECT * FROM test WHERE PK='user1'"),
+                ("Read specific bins", "SELECT name, age FROM test WHERE PK='user1'"),
+                ("Read with metadata", "SELECT *, generation, ttl FROM test WHERE PK='user1'"),
+                ("Scan all records (careful!)", "SELECT * FROM test"),
+                ("Count records", "SELECT count(*) FROM test"),
+                ("─── UPDATE RECORDS ───", ""),
+                ("Update a bin", "UPDATE test SET age=31 WHERE PK='user1'"),
+                ("Add new bin to record", "UPDATE test SET status='active' WHERE PK='user1'"),
+                ("─── DELETE RECORDS ───", ""),
+                ("Delete a record", "DELETE FROM test WHERE PK='user1'"),
+                ("Note: In SC mode, deletes create tombstones!", ""),
+            ],
+            'asadm': [
+                ("Check object count", "show stat namespace like objects"),
+                ("View tombstone count", "show stat namespace like tombstones"),
+                ("Check write stats", "show stat namespace like client_write"),
+                ("Check read stats", "show stat namespace like client_read"),
+                ("Check delete stats", "show stat namespace like client_delete"),
+            ],
+        },
+        'consistency': {
+            'title': '🔒 CONSISTENCY LEVELS',
+            'aql': [
+                ("─── SESSION CONSISTENCY DEMO ───", ""),
+                ("Write a test record", "INSERT INTO test (PK, counter) VALUES ('session_test', 0)"),
+                ("Read immediately after write", "SELECT * FROM test WHERE PK='session_test'"),
+                ("Update and read", "UPDATE test SET counter=1 WHERE PK='session_test'"),
+                ("Verify update visible", "SELECT *, generation FROM test WHERE PK='session_test'"),
+                ("─── MULTIPLE WRITES ───", ""),
+                ("Sequential write 1", "UPDATE test SET counter=10 WHERE PK='session_test'"),
+                ("Sequential write 2", "UPDATE test SET counter=20 WHERE PK='session_test'"),
+                ("Check final value", "SELECT counter, generation FROM test WHERE PK='session_test'"),
+                ("─── CLEANUP ───", ""),
+                ("Delete test record", "DELETE FROM test WHERE PK='session_test'"),
+            ],
+            'asadm': [
+                ("─── READ POLICY ───", ""),
+                ("Check read consistency level", "show config namespace like read-consistency"),
+                ("Check write commit level", "show config namespace like write-commit"),
+                ("─── CONSISTENCY STATS ───", ""),
+                ("View read latency", "show latency like read"),
+                ("View write latency", "show latency like write"),
+                ("Check proxy operations", "show stat namespace like proxy"),
+                ("View retransmit stats", "show stat namespace like retransmit"),
+            ],
+        },
+        'generation': {
+            'title': '🔢 GENERATION & OPTIMISTIC LOCKING',
+            'aql': [
+                ("─── SETUP TEST RECORD ───", ""),
+                ("Create test record", "INSERT INTO test (PK, balance) VALUES ('account1', 1000)"),
+                ("Check initial generation", "SELECT *, generation FROM test WHERE PK='account1'"),
+                ("─── WATCH GENERATION INCREMENT ───", ""),
+                ("First update (gen 1→2)", "UPDATE test SET balance=1100 WHERE PK='account1'"),
+                ("Check generation", "SELECT balance, generation FROM test WHERE PK='account1'"),
+                ("Second update (gen 2→3)", "UPDATE test SET balance=1200 WHERE PK='account1'"),
+                ("Check generation again", "SELECT balance, generation FROM test WHERE PK='account1'"),
+                ("─── SIMULATE CONCURRENT ACCESS ───", ""),
+                ("Note: Open TWO AQL shells to simulate concurrent clients", ""),
+                ("Shell 1: Read record", "SELECT *, generation FROM test WHERE PK='account1'"),
+                ("Shell 2: Update record", "UPDATE test SET balance=999 WHERE PK='account1'"),
+                ("Shell 1: Try update (may see stale gen)", "SELECT *, generation FROM test WHERE PK='account1'"),
+                ("─── CLEANUP ───", ""),
+                ("Delete test record", "DELETE FROM test WHERE PK='account1'"),
+            ],
+            'asadm': [
+                ("Check generation error stats", "show stat namespace like fail_generation"),
+                ("View all failure stats", "show stat namespace like fail_"),
+                ("Check key-busy errors", "show stat namespace like key_busy"),
+            ],
+        },
+        'cluster': {
+            'title': '🖥️ CLUSTER HEALTH & PARTITIONS',
+            'aql': [
+                ("─── HEALTH CHECK ───", ""),
+                ("Quick read test", "SELECT count(*) FROM test"),
+                ("Write test", "INSERT INTO test (PK, check) VALUES ('health_check', 'ok')"),
+                ("Read test", "SELECT * FROM test WHERE PK='health_check'"),
+                ("Delete test", "DELETE FROM test WHERE PK='health_check'"),
+            ],
+            'asadm': [
+                ("─── PARTITION STATUS ───", ""),
+                ("View partition map", "show pmap"),
+                ("Check dead partitions", "show stat namespace like dead_partitions"),
+                ("Check unavailable partitions", "show stat namespace like unavailable"),
+                ("View partition ownership", "info partition"),
+                ("─── ROSTER & NODES ───", ""),
+                ("View roster", "show roster"),
+                ("Show observed nodes", "show roster observed"),
+                ("Show pending roster", "show roster pending"),
+                ("View node info", "info node"),
+                ("─── MIGRATION STATUS ───", ""),
+                ("Check migration progress", "show stat like migrate"),
+                ("View migration details", "show stat namespace like migrate_"),
+                ("Check remaining migrations", "show stat namespace like remaining"),
+                ("─── RECOVERY COMMANDS ───", ""),
+                ("If dead partitions exist:", ""),
+                ("  Revive (USE CAUTION!)", "asinfo -v 'revive:namespace=test'"),
+                ("  Then recluster", "manage recluster"),
+            ],
+        },
+        'errors': {
+            'title': '⚠️ ERROR HANDLING & TROUBLESHOOTING',
+            'aql': [
+                ("─── GENERATE TEST ERRORS ───", ""),
+                ("Create test record", "INSERT INTO test (PK, val) VALUES ('err_test', 1)"),
+                ("Try inserting to non-existent ns", "INSERT INTO fake_ns (PK, val) VALUES ('x', 1)"),
+                ("Read non-existent record", "SELECT * FROM test WHERE PK='does_not_exist'"),
+                ("─── GENERATION CONFLICT TEST ───", ""),
+                ("(Open 2 shells for this test)", ""),
+                ("Shell 1: Read record", "SELECT *, generation FROM test WHERE PK='err_test'"),
+                ("Shell 2: Update record", "UPDATE test SET val=100 WHERE PK='err_test'"),
+                ("Shell 1: Check if gen changed", "SELECT *, generation FROM test WHERE PK='err_test'"),
+            ],
+            'asadm': [
+                ("─── ERROR STATISTICS ───", ""),
+                ("All failure stats", "show stat namespace like fail_"),
+                ("Generation errors", "show stat namespace like fail_generation"),
+                ("Key busy errors", "show stat namespace like fail_key_busy"),
+                ("Record too big errors", "show stat namespace like fail_record_too_big"),
+                ("Forbidden errors (SC)", "show stat namespace like fail_forbidden"),
+                ("─── TIMEOUT & NETWORK ───", ""),
+                ("Check timeouts", "show stat namespace like timeout"),
+                ("Check proxy errors", "show stat namespace like proxy_error"),
+                ("─── PARTITION ERRORS ───", ""),
+                ("Unavailable partition ops", "show stat namespace like unavailable"),
+                ("Dead partition status", "show stat namespace like dead"),
+                ("─── TRANSACTION STATS ───", ""),
+                ("Read errors", "show stat namespace like client_read_error"),
+                ("Write errors", "show stat namespace like client_write_error"),
+                ("Delete errors", "show stat namespace like client_delete_error"),
+            ],
+        },
+    }
+    
+    lesson_data = commands.get(lesson_name, commands.get('basic_ops'))
+    
+    # Print header with lesson-specific title
+    title = lesson_data.get('title', '📋 SUGGESTED COMMANDS TO TRY')
+    print(f"\n{Colors.YELLOW}{'─'*70}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}{title}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}{'─'*70}{Colors.ENDC}")
+    
+    # Show terminal commands if present
+    if 'terminal' in lesson_data and lesson_data['terminal']:
+        print(f"\n  {Colors.BOLD}🖥️  Terminal (run outside container):{Colors.ENDC}")
+        for desc, cmd in lesson_data['terminal']:
+            if cmd:  # Skip empty commands (section headers)
+                print(f"    {Colors.CYAN}•{Colors.ENDC} {desc}:")
+                print(f"      {Colors.DIM}{cmd}{Colors.ENDC}")
+            else:
+                print(f"    {Colors.CYAN}{desc}{Colors.ENDC}")
+    
+    # Show AQL commands if present
+    if 'aql' in lesson_data and lesson_data['aql']:
+        print(f"\n  {Colors.BOLD}📊 AQL Shell [a] - Data Operations:{Colors.ENDC}")
+        for desc, cmd in lesson_data['aql']:
+            if cmd:  # Skip empty commands (section headers)
+                print(f"    {Colors.CYAN}•{Colors.ENDC} {desc}:")
+                print(f"      {Colors.DIM}{cmd}{Colors.ENDC}")
+            else:
+                print(f"    {Colors.CYAN}{desc}{Colors.ENDC}")
+    
+    # Show ASADM commands if present
+    if 'asadm' in lesson_data and lesson_data['asadm']:
+        print(f"\n  {Colors.BOLD}🔧 ASADM Shell [s] - Admin Operations:{Colors.ENDC}")
+        for desc, cmd in lesson_data['asadm']:
+            if cmd:  # Skip empty commands (section headers)
+                print(f"    {Colors.CYAN}•{Colors.ENDC} {desc}:")
+                print(f"      {Colors.DIM}{cmd}{Colors.ENDC}")
+            else:
+                print(f"    {Colors.CYAN}{desc}{Colors.ENDC}")
+    
+    print(f"\n{Colors.YELLOW}{'─'*70}{Colors.ENDC}")
+
+def interactive_menu(lesson_name='basic_ops', namespace='test'):
+    """Display interactive menu and handle user choice."""
+    container = detect_aerolab_container()
+    
+    # Only show suggested commands after configuration lessons (lesson 3+)
+    # Skip for setup/intro/configuration lessons
+    skip_commands = lesson_name in ['aerolab', 'introduction', 'configuration']
+    if not skip_commands:
+        show_suggested_commands(lesson_name)
+    
+    while True:
+        print(f"\n{Colors.BOLD}{'═'*60}{Colors.ENDC}")
+        print(f"{Colors.BOLD}  What would you like to do?{Colors.ENDC}")
+        print(f"{Colors.BOLD}{'═'*60}{Colors.ENDC}")
+        print(f"  {Colors.GREEN}[Enter]{Colors.ENDC} Continue to next section")
+        print(f"  {Colors.CYAN}[a]{Colors.ENDC}     Open AQL shell (query/insert data)")
+        print(f"  {Colors.CYAN}[s]{Colors.ENDC}     Open ASADM shell (admin commands)")
+        print(f"  {Colors.YELLOW}[v]{Colors.ENDC}     Validate cluster health")
+        print(f"  {Colors.RED}[q]{Colors.ENDC}     Quit tutorial")
+        print(f"{Colors.BOLD}{'═'*60}{Colors.ENDC}")
+        
+        try:
+            choice = input(f"{Colors.BLUE}Enter choice [Enter/a/s/v/q]: {Colors.ENDC}").strip().lower()
+        except KeyboardInterrupt:
+            print(f"\n{Colors.YELLOW}Tutorial interrupted.{Colors.ENDC}")
+            raise SystemExit(0)
+        except EOFError:
+            return 'continue'
+        
+        if choice in ['', 'c', 'continue']:
+            return 'continue'
+        elif choice in ['a', 'aql', '1']:
+            open_aql_shell(container, namespace)
+            show_suggested_commands(lesson_name)  # Show commands again after returning
+        elif choice in ['s', 'asadm', '2']:
+            open_asadm_shell(container)
+            show_suggested_commands(lesson_name)  # Show commands again after returning
+        elif choice in ['v', 'validate', '3']:
+            return 'validate'
+        elif choice in ['q', 'quit', 'exit']:
+            print(f"{Colors.YELLOW}Exiting tutorial...{Colors.ENDC}")
+            raise SystemExit(0)
+        else:
+            print(f"{Colors.RED}Invalid choice. Please enter a, s, v, q or just press Enter.{Colors.ENDC}")
 
 # =============================================================================
 # AEROLAB SETUP INSTRUCTIONS
@@ -263,10 +628,175 @@ class StrongConsistencyTutorial:
             'use_services_alternate': True,
         }
     
-    def pause(self, message="Press Enter to continue..."):
-        """Pause for user input in interactive mode."""
+    def pause(self, lesson_name='basic_ops', message=None):
+        """Pause for user input in interactive mode with menu options."""
         if self.interactive:
-            wait_for_user(message)
+            # Always validate cluster health before showing menu
+            healthy = self.validate_and_fix_cluster(compact=True)
+            
+            if not healthy:
+                print_warning("Issues detected! Please fix before continuing or press Enter to proceed anyway.")
+            
+            while True:
+                choice = interactive_menu(lesson_name, self.namespace)
+                if choice == 'continue':
+                    break
+                elif choice == 'validate':
+                    # Full validation on manual request
+                    self.validate_and_fix_cluster(compact=False)
+    
+    def validate_and_fix_cluster(self, compact=False):
+        """Validate cluster health and help fix any issues.
+        
+        Args:
+            compact: If True, show brief one-line status. If False, show full details.
+        """
+        issues_found = False
+        info = {}
+        
+        # Check 1: Connection
+        if not self.client:
+            if compact:
+                print_error("❌ Not connected to cluster!")
+            else:
+                print(f"\n{Colors.CYAN}{'='*60}{Colors.ENDC}")
+                print(f"{Colors.CYAN}           CLUSTER HEALTH CHECK{Colors.ENDC}")
+                print(f"{Colors.CYAN}{'='*60}{Colors.ENDC}\n")
+                print(f"{Colors.BOLD}1. Checking connection...{Colors.ENDC}")
+                print_error("Not connected to cluster!")
+            
+            print_info("Attempting to reconnect...")
+            if self.connect():
+                print_success("Reconnected successfully!")
+            else:
+                print_error("Could not reconnect. Please check if Aerospike is running.")
+                return False
+        else:
+            # Test connection with a simple operation
+            try:
+                self.client.get_nodes()
+            except ae_exception.AerospikeError as e:
+                if compact:
+                    print_error(f"❌ Connection issue: {e}")
+                else:
+                    print_error(f"Connection issue: {e}")
+                print_info("Attempting to reconnect...")
+                try:
+                    self.disconnect()
+                    if self.connect():
+                        print_success("Reconnected successfully!")
+                    else:
+                        return False
+                except Exception:
+                    return False
+        
+        # Get SC status
+        sc_enabled, info = self.verify_sc_enabled()
+        
+        # Check for issues
+        if isinstance(info, dict):
+            dead = info.get('dead_partitions', 0)
+            unavail = info.get('unavailable_partitions', 0)
+            if dead > 0 or unavail > 0 or not sc_enabled:
+                issues_found = True
+        else:
+            issues_found = True
+        
+        if compact:
+            # Show compact one-line status
+            if issues_found:
+                status_parts = []
+                if not sc_enabled:
+                    status_parts.append("SC disabled")
+                if isinstance(info, dict):
+                    if info.get('dead_partitions', 0) > 0:
+                        status_parts.append(f"dead={info['dead_partitions']}")
+                    if info.get('unavailable_partitions', 0) > 0:
+                        status_parts.append(f"unavail={info['unavailable_partitions']}")
+                print(f"\n{Colors.YELLOW}⚠ Cluster Status: {', '.join(status_parts)} [press 'v' for details]{Colors.ENDC}")
+            else:
+                rf = info.get('replication_factor', '?') if isinstance(info, dict) else '?'
+                ns_size = info.get('ns_cluster_size', '?') if isinstance(info, dict) else '?'
+                print(f"\n{Colors.GREEN}✓ Cluster OK: SC=enabled, RF={rf}, nodes={ns_size}, partitions=healthy{Colors.ENDC}")
+            return not issues_found
+        
+        # Full detailed output
+        print(f"\n{Colors.CYAN}{'='*60}{Colors.ENDC}")
+        print(f"{Colors.CYAN}           CLUSTER HEALTH CHECK{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'='*60}{Colors.ENDC}\n")
+        
+        # Check 1: Connection
+        print(f"{Colors.BOLD}1. Checking connection...{Colors.ENDC}")
+        print_success("Connection OK")
+        
+        # Check 2: SC enabled
+        print(f"\n{Colors.BOLD}2. Checking Strong Consistency status...{Colors.ENDC}")
+        if sc_enabled:
+            print_success(f"Strong Consistency: ENABLED")
+            print(f"   ├── Replication Factor: {info.get('replication_factor', 'N/A')}")
+            print(f"   └── NS Cluster Size: {info.get('ns_cluster_size', 'N/A')}")
+        else:
+            print_error("Strong Consistency: NOT ENABLED or namespace not found")
+            print_info(f"Make sure namespace '{self.namespace}' has strong-consistency=true")
+        
+        # Check 3: Partitions
+        print(f"\n{Colors.BOLD}3. Checking partition health...{Colors.ENDC}")
+        if isinstance(info, dict):
+            dead = info.get('dead_partitions', 0)
+            unavail = info.get('unavailable_partitions', 0)
+            
+            if dead > 0:
+                print_error(f"Dead partitions: {dead}")
+                print_warning("Dead partitions indicate potential data loss!")
+                print_info("To revive dead partitions (if acceptable):")
+                print_code(f"asinfo -v 'revive:namespace={self.namespace}'")
+            else:
+                print_success("Dead partitions: 0")
+            
+            if unavail > 0:
+                print_warning(f"Unavailable partitions: {unavail}")
+                print_info("Some partitions are temporarily unavailable.")
+                print_info("This usually resolves when all roster nodes rejoin.")
+            else:
+                print_success("Unavailable partitions: 0")
+        
+        # Check 4: Roster
+        print(f"\n{Colors.BOLD}4. Checking roster configuration...{Colors.ENDC}")
+        container = detect_aerolab_container()
+        roster_ok = True
+        if container:
+            roster_info = run_asinfo_command(container, f"roster:namespace={self.namespace}")
+            if 'roster=null' in roster_info or 'roster=' not in roster_info:
+                print_warning("Roster may not be properly configured")
+                print_info("To configure roster:")
+                print_code(f"aerolab conf sc -n <cluster_name>")
+                print_info("Or manually:")
+                print_code(f"asadm> manage roster stage observed ns {self.namespace}")
+                print_code("asadm> manage recluster")
+                roster_ok = False
+            else:
+                print_success("Roster configured")
+                # Parse and show roster summary
+                if 'observed_nodes=' in roster_info:
+                    parts = roster_info.split(':')
+                    for part in parts:
+                        if part.startswith('roster='):
+                            roster_val = part.split('=')[1]
+                            node_count = len(roster_val.split(',')) if roster_val and roster_val != 'null' else 0
+                            print(f"   └── Roster nodes: {node_count}")
+        else:
+            print_warning("Could not detect AeroLab container for roster check")
+        
+        # Summary
+        print(f"\n{Colors.CYAN}{'='*60}{Colors.ENDC}")
+        if issues_found or not roster_ok:
+            print_warning("Issues found! Please address them before continuing.")
+            print_info("You can open ASADM shell (option 's') to investigate further.")
+        else:
+            print_success("All checks passed! Cluster is healthy.")
+        print(f"{Colors.CYAN}{'='*60}{Colors.ENDC}\n")
+        
+        return not issues_found and roster_ok
     
     def connect(self):
         """Connect to the Aerospike cluster."""
@@ -359,17 +889,17 @@ and testing clusters. It supports Docker, AWS, and GCP backends.
 For SC development, AeroLab is the fastest way to get started!
 """)
         
-        self.pause()
+        self.pause('aerolab')
         
         print_section("Quick Setup (3 Commands)")
         print(f"{Colors.DIM}{AEROLAB_SETUP}{Colors.ENDC}")
         
-        self.pause()
+        self.pause('aerolab')
         
         print_section("Multi-Node SC Cluster")
         print(f"{Colors.DIM}{AEROLAB_MULTI_NODE}{Colors.ENDC}")
         
-        self.pause()
+        self.pause('aerolab')
         
         print_section("Verifying Your Setup")
         
@@ -394,7 +924,7 @@ For SC development, AeroLab is the fastest way to get started!
         """
         print(f"{Colors.DIM}{verify_commands}{Colors.ENDC}")
         
-        self.pause()
+        self.pause('aerolab')
     
     # =========================================================================
     # LESSON 1: INTRODUCTION
@@ -406,7 +936,7 @@ For SC development, AeroLab is the fastest way to get started!
         
         print_concept("What is Strong Consistency?", INTRO_TEXT)
         
-        self.pause()
+        self.pause('introduction')
         
         print_section("Comparing AP vs SC Mode")
         
@@ -424,7 +954,7 @@ For SC development, AeroLab is the fastest way to get started!
         """
         print(comparison)
         
-        self.pause()
+        self.pause('introduction')
     
     # =========================================================================
     # LESSON 2: CONFIGURATION
@@ -461,7 +991,7 @@ For SC development, AeroLab is the fastest way to get started!
 • commit-to-device true    - Optional: ensures durability on crash
 """)
         
-        self.pause()
+        self.pause('configuration')
         
         print_section("Step 2: Configure the Roster")
         
@@ -483,14 +1013,14 @@ For SC development, AeroLab is the fastest way to get started!
         """
         print(f"{Colors.DIM}{roster_commands}{Colors.ENDC}")
         
-        self.pause()
+        self.pause('configuration')
         
         # Show actual cluster info if connected
         if self.client:
             print_section("Current Cluster Configuration")
             self.show_cluster_info()
         
-        self.pause()
+        self.pause('configuration')
     
     def show_cluster_info(self):
         """Display current cluster and namespace information."""
@@ -541,7 +1071,7 @@ When a write succeeds in SC mode:
   • The write has a specific position in the record's history
 """)
         
-        self.pause()
+        self.pause('basic_ops')
         
         print_section("Demo: Write and Read Operations")
         
@@ -595,7 +1125,7 @@ When a write succeeds in SC mode:
             print_error(f"Operation failed: {e}")
             self._explain_error(e)
         
-        self.pause()
+        self.pause('basic_ops')
     
     # =========================================================================
     # LESSON 4: CONSISTENCY DEMONSTRATIONS
@@ -607,7 +1137,7 @@ When a write succeeds in SC mode:
         
         print_concept("Session vs Linearizable Consistency", CONSISTENCY_LEVELS)
         
-        self.pause()
+        self.pause('consistency')
         
         print_section("Demo: Session Consistency (Read-Your-Writes)")
         
@@ -636,7 +1166,7 @@ When a write succeeds in SC mode:
         except ae_exception.AerospikeError as e:
             print_error(f"Error: {e}")
         
-        self.pause()
+        self.pause('consistency')
         
         print_section("Demo: Linearizable Reads")
         
@@ -675,7 +1205,7 @@ When a write succeeds in SC mode:
         except ae_exception.AerospikeError as e:
             print_error(f"Error: {e}")
         
-        self.pause()
+        self.pause('consistency')
     
     # =========================================================================
     # LESSON 5: CONCURRENT WRITES
@@ -695,7 +1225,7 @@ sequential order. This means:
   • The generation number reflects the total write count
 """)
         
-        self.pause()
+        self.pause('basic_ops')
         
         print_section("Demo: Concurrent Counter Increments")
         
@@ -766,7 +1296,7 @@ sequential order. This means:
         except ae_exception.AerospikeError as e:
             print_error(f"Error: {e}")
         
-        self.pause()
+        self.pause('basic_ops')
     
     # =========================================================================
     # LESSON 6: GENERATION CONFLICTS
@@ -788,7 +1318,7 @@ This enables optimistic locking (check-and-set):
 This prevents lost updates in concurrent scenarios.
 """)
         
-        self.pause()
+        self.pause('generation')
         
         print_section("Demo: Generation Conflict Detection")
         
@@ -834,7 +1364,7 @@ This prevents lost updates in concurrent scenarios.
         except ae_exception.AerospikeError as e:
             print_error(f"Error: {e}")
         
-        self.pause()
+        self.pause('generation')
     
     # =========================================================================
     # LESSON 7: ERROR HANDLING
@@ -846,7 +1376,7 @@ This prevents lost updates in concurrent scenarios.
         
         print_concept("InDoubt Errors", INDOUBT_CONCEPT)
         
-        self.pause()
+        self.pause('errors')
         
         print_section("Common SC Errors")
         
@@ -886,7 +1416,7 @@ Example pattern:
               # Retry the write
 """)
         
-        self.pause()
+        self.pause('errors')
     
     # =========================================================================
     # LESSON 8: CLUSTER BEHAVIOR
@@ -898,7 +1428,7 @@ Example pattern:
         
         print_concept("Partition States", PARTITION_CONCEPT)
         
-        self.pause()
+        self.pause('cluster')
         
         print_section("Failure Scenarios")
         
@@ -931,7 +1461,7 @@ Example pattern:
         """
         print(f"{Colors.DIM}{scenarios}{Colors.ENDC}")
         
-        self.pause()
+        self.pause('cluster')
         
         print_section("Recovery Commands")
         
@@ -950,7 +1480,7 @@ Example pattern:
         """
         print(f"{Colors.DIM}{commands}{Colors.ENDC}")
         
-        self.pause()
+        self.pause('cluster')
     
     # =========================================================================
     # LESSON 9: BEST PRACTICES
@@ -997,7 +1527,7 @@ Example pattern:
         """
         print(practices)
         
-        self.pause()
+        self.pause('cluster')
     
     # =========================================================================
     # HELPER METHODS
@@ -1090,7 +1620,8 @@ Example pattern:
                 else:
                     print_success(f"\n✓ Strong Consistency verified on namespace '{self.namespace}'")
                 
-                self.pause("Press Enter to start the tutorial...")
+                # Use 'introduction' to skip showing commands at tutorial start
+                self.pause('introduction')
             
             all_lessons = [
                 ('0', 'AeroLab Setup', self.lesson_aerolab_setup),

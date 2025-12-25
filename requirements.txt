@@ -1,0 +1,5 @@
+# Aerospike Python Client
+aerospike>=11.0.0
+
+# For colored terminal output
+colorama>=0.4.6

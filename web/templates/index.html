@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aerospike Strong Consistency Tutorial</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@0.294.0/font/lucide.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <svg class="logo-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"/></svg>
+                <span class="logo-text">Aerospike SC</span>
+            </div>
+            <span class="version">Tutorial v1.0</span>
+        </div>
+            
+            <div class="cluster-status" id="cluster-status">
+                <div class="status-indicator loading"></div>
+                <span>Checking cluster...</span>
+            </div>
+            
+            <button class="btn btn-setup" id="setup-cluster-btn" onclick="openSetupWizard()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                Setup SC Cluster
+            </button>
+            
+            <nav class="lessons-nav">
+                <div class="nav-section">
+                    <h3>Setup</h3>
+                    {% for lesson in lessons %}
+                    {% if lesson.category == 'setup' %}
+                    <a href="#" class="nav-item" data-lesson="{{ lesson.id }}">
+                        <span class="nav-text">{{ lesson.short }}</span>
+                    </a>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                
+                <div class="nav-section">
+                    <h3>Concepts</h3>
+                    {% for lesson in lessons %}
+                    {% if lesson.category == 'concepts' %}
+                    <a href="#" class="nav-item" data-lesson="{{ lesson.id }}">
+                        <span class="nav-text">{{ lesson.short }}</span>
+                    </a>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                
+                <div class="nav-section">
+                    <h3>Practice</h3>
+                    {% for lesson in lessons %}
+                    {% if lesson.category == 'practice' %}
+                    <a href="#" class="nav-item" data-lesson="{{ lesson.id }}">
+                        <span class="nav-text">{{ lesson.short }}</span>
+                    </a>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                
+                <div class="nav-section">
+                    <h3>Reference</h3>
+                    {% for lesson in lessons %}
+                    {% if lesson.category == 'reference' %}
+                    <a href="#" class="nav-item" data-lesson="{{ lesson.id }}">
+                        <span class="nav-text">{{ lesson.short }}</span>
+                    </a>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </nav>
+        </aside>
+        
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Top Bar -->
+            <header class="top-bar">
+                <div class="breadcrumb">
+                    <span id="current-lesson-title">Welcome</span>
+                </div>
+                <div class="top-actions">
+                    <button class="btn btn-outline" id="prev-btn" disabled>
+                        ← Previous
+                    </button>
+                    <button class="btn btn-primary" id="next-btn">
+                        Next →
+                    </button>
+                </div>
+            </header>
+            
+            <!-- Content + Terminal Split -->
+            <div class="content-area">
+                <!-- Lesson Content -->
+                <section class="lesson-content" id="lesson-content">
+                    <div class="welcome-screen">
+                        <h1>Aerospike Strong Consistency Tutorial</h1>
+                        <p class="subtitle">Learn SC mode through interactive lessons and hands-on practice</p>
+                        
+                        <div class="feature-grid">
+                            <div class="feature-card">
+                                <h3>10 Lessons</h3>
+                                <p>From basics to advanced cluster behavior</p>
+                            </div>
+                            <div class="feature-card">
+                                <h3>Live Terminals</h3>
+                                <p>Practice with AQL and ASADM right here</p>
+                            </div>
+                            <div class="feature-card">
+                                <h3>Real Cluster</h3>
+                                <p>Connected to your Aerospike instance</p>
+                            </div>
+                        </div>
+                        
+                        <button class="btn btn-large btn-primary" onclick="loadLesson(1)">
+                            Start Learning →
+                        </button>
+                    </div>
+                </section>
+                
+                <!-- Terminal Panel -->
+                <section class="terminal-panel">
+                    <div class="terminal-tabs">
+                        <button class="terminal-tab active" data-terminal="aql">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>
+                            AQL
+                        </button>
+                        <button class="terminal-tab" data-terminal="asadm">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                            ASADM
+                        </button>
+                        <button class="terminal-tab" data-terminal="bash">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                            Shell
+                        </button>
+                        <div class="terminal-actions">
+                            <button class="btn-icon" id="clear-terminal" title="Clear">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                            </button>
+                            <button class="btn-icon" id="reconnect-terminal" title="Reconnect">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="terminal-container" id="terminal-container">
+                        <div id="terminal"></div>
+                    </div>
+                    <div class="terminal-status" id="terminal-status">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Connecting...</span>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Setup Wizard Modal -->
+    <div class="modal-overlay" id="setup-modal" style="display: none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Setup SC Cluster</h2>
+                <button class="modal-close" onclick="closeSetupWizard()">×</button>
+            </div>
+            <div class="modal-body" id="setup-wizard-content">
+                <!-- Content will be dynamically inserted -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Store lessons data -->
+    <script>
+        const LESSONS = {{ lessons | tojson | safe }};
+    </script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
+

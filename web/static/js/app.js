@@ -91,6 +91,234 @@ function loadLesson(lessonId) {
     
     // Scroll to top
     contentEl.scrollTop = 0;
+    
+    // Initialize code tabs (AQL vs Python)
+    initCodeTabs();
+    
+    // Apply syntax highlighting
+    applySyntaxHighlighting();
+    
+    // Add copy buttons to all code blocks
+    addCopyButtons();
+}
+
+// =============================================================================
+// COPY BUTTONS FOR CODE BLOCKS
+// =============================================================================
+
+// =============================================================================
+// CODE TABS (AQL vs Python)
+// =============================================================================
+
+function initCodeTabs() {
+    // Find all code tab containers
+    document.querySelectorAll('.code-tabs').forEach(container => {
+        const buttons = container.querySelectorAll('.code-tab-btn');
+        const contents = container.querySelectorAll('.code-tab-content');
+        
+        buttons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const lang = btn.dataset.lang;
+                
+                // Update button states
+                buttons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                
+                // Update content visibility
+                contents.forEach(c => {
+                    c.classList.remove('active');
+                    if (c.dataset.lang === lang) {
+                        c.classList.add('active');
+                    }
+                });
+                
+                // Re-add buttons after tab switch
+                setTimeout(() => addCopyButtons(), 50);
+            });
+        });
+    });
+}
+
+// Apply syntax highlighting with highlight.js
+function applySyntaxHighlighting() {
+    if (typeof hljs === 'undefined') {
+        console.warn('highlight.js not loaded');
+        return;
+    }
+    
+    // Highlight Python code blocks
+    document.querySelectorAll('.code-tab-content[data-lang="python"] pre code').forEach(block => {
+        // Add language class if not present
+        if (!block.classList.contains('language-python')) {
+            block.classList.add('language-python');
+        }
+        hljs.highlightElement(block);
+    });
+    
+    // Highlight AQL as SQL (closest match)
+    document.querySelectorAll('.code-tab-content[data-lang="aql"] pre code').forEach(block => {
+        if (!block.classList.contains('language-sql')) {
+            block.classList.add('language-sql');
+        }
+        hljs.highlightElement(block);
+    });
+    
+    // Highlight standalone code blocks
+    document.querySelectorAll('.lesson-content pre code:not(.hljs)').forEach(block => {
+        // Detect language from content
+        const content = block.textContent;
+        if (content.includes('import ') || content.includes('def ') || content.includes('client.')) {
+            block.classList.add('language-python');
+        } else if (content.includes('SELECT') || content.includes('INSERT') || content.includes('DELETE')) {
+            block.classList.add('language-sql');
+        } else if (content.includes('asadm') || content.includes('aerolab') || content.includes('docker')) {
+            block.classList.add('language-bash');
+        }
+        hljs.highlightElement(block);
+    });
+}
+
+function addCopyButtons() {
+    // Find all pre elements in lesson content
+    const codeBlocks = document.querySelectorAll('.lesson-content pre');
+    
+    codeBlocks.forEach(pre => {
+        // Skip if already has a copy button
+        if (pre.querySelector('.copy-btn')) return;
+        
+        // Create button container
+        const btnContainer = document.createElement('div');
+        btnContainer.className = 'code-btn-container';
+        
+        // Create copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span>Copy</span>
+        `;
+        
+        copyBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const code = pre.querySelector('code');
+            const text = code ? code.textContent : pre.textContent;
+            
+            try {
+                await navigator.clipboard.writeText(text.trim());
+                copyBtn.classList.add('copied');
+                copyBtn.querySelector('span').textContent = 'Copied!';
+                copyBtn.querySelector('svg').innerHTML = `<polyline points="20 6 9 17 4 12"></polyline>`;
+                
+                setTimeout(() => {
+                    copyBtn.classList.remove('copied');
+                    copyBtn.querySelector('span').textContent = 'Copy';
+                    copyBtn.querySelector('svg').innerHTML = `
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    `;
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy:', err);
+            }
+        });
+        
+        btnContainer.appendChild(copyBtn);
+        
+        // Check if this is a Python code block (inside python tab or has python class)
+        const codeEl = pre.querySelector('code');
+        const isPython = pre.closest('.code-tab-content[data-lang="python"]') ||
+                        (codeEl && codeEl.className && codeEl.className.includes('python')) ||
+                        pre.classList.contains('python-code');
+        
+        if (isPython) {
+            // Add execute button for Python code
+            const execBtn = document.createElement('button');
+            execBtn.className = 'exec-btn';
+            execBtn.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <span>Run</span>
+            `;
+            
+            execBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const code = pre.querySelector('code');
+                const text = code ? code.textContent : pre.textContent;
+                
+                executeInPythonTerminal(text.trim(), execBtn);
+            });
+            
+            btnContainer.appendChild(execBtn);
+        }
+        
+        pre.appendChild(btnContainer);
+    });
+}
+
+// Execute code in Python terminal
+function executeInPythonTerminal(code, btn) {
+    // Switch to Python terminal if not already there
+    if (currentTerminalType !== 'python') {
+        // Click the Python tab
+        const pythonTab = document.querySelector('.terminal-tab[data-terminal="python"]');
+        if (pythonTab) {
+            pythonTab.click();
+            // Wait for connection then send code
+            setTimeout(() => sendCodeToTerminal(code, btn), 1500);
+        }
+    } else {
+        sendCodeToTerminal(code, btn);
+    }
+}
+
+function sendCodeToTerminal(code, btn) {
+    if (!terminalSocket || terminalSocket.readyState !== WebSocket.OPEN) {
+        alert('Python terminal not connected. Please wait and try again.');
+        return;
+    }
+    
+    // Show running state
+    btn.classList.add('running');
+    btn.querySelector('span').textContent = 'Running...';
+    
+    // Split code into lines and send each line with Enter
+    const lines = code.split('\n');
+    let delay = 0;
+    
+    lines.forEach((line, index) => {
+        setTimeout(() => {
+            // Send line + Enter
+            terminalSocket.send(JSON.stringify({
+                type: 'input',
+                data: line + '\r'
+            }));
+            
+            // Reset button after last line
+            if (index === lines.length - 1) {
+                setTimeout(() => {
+                    btn.classList.remove('running');
+                    btn.classList.add('executed');
+                    btn.querySelector('span').textContent = 'Done!';
+                    btn.querySelector('svg').innerHTML = `<polyline points="20 6 9 17 4 12"></polyline>`;
+                    
+                    setTimeout(() => {
+                        btn.classList.remove('executed');
+                        btn.querySelector('span').textContent = 'Run';
+                        btn.querySelector('svg').innerHTML = `<polygon points="5 3 19 12 5 21 5 3"></polygon>`;
+                    }, 2000);
+                }, 500);
+            }
+        }, delay);
+        delay += 100; // Small delay between lines
+    });
 }
 
 // Make loadLesson available globally
@@ -179,7 +407,41 @@ function initTerminal() {
     document.getElementById('reconnect-terminal').addEventListener('click', () => {
         connectTerminal(currentTerminalType);
     });
+    
+    // Toggle minimize/maximize terminal
+    const toggleBtn = document.getElementById('toggle-terminal');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const panel = document.querySelector('.terminal-panel');
+            if (!panel) return;
+            
+            const isMinimized = panel.classList.toggle('minimized');
+            toggleBtn.title = isMinimized ? 'Maximize' : 'Minimize';
+            
+            // Toggle icon visibility
+            const iconMin = toggleBtn.querySelector('.icon-minimize');
+            const iconMax = toggleBtn.querySelector('.icon-maximize');
+            if (iconMin && iconMax) {
+                iconMin.style.display = isMinimized ? 'none' : 'block';
+                iconMax.style.display = isMinimized ? 'block' : 'none';
+            }
+            
+            // Refit terminal when maximized
+            if (!isMinimized && fitAddon) {
+                setTimeout(() => fitAddon.fit(), 100);
+            }
+        });
+    }
 }
+
+// Global function to toggle terminal (can be called from anywhere)
+window.toggleTerminal = function() {
+    const toggleBtn = document.getElementById('toggle-terminal');
+    if (toggleBtn) toggleBtn.click();
+};
 
 function initTerminalTabs() {
     document.querySelectorAll('.terminal-tab').forEach(tab => {

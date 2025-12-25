@@ -786,8 +786,68 @@ def detect_container():
 
 
 # =============================================================================
-# WEBSOCKET TERMINAL
+# WEBSOCKET TERMINAL WITH PTY SUPPORT
 # =============================================================================
+
+import pty
+import select
+import termios
+import struct
+import fcntl
+
+
+class PtyProcess:
+    """Wrapper for PTY-based process."""
+    def __init__(self, fd, pid):
+        self.fd = fd
+        self.pid = pid
+        self.returncode = None
+    
+    def write(self, data):
+        os.write(self.fd, data)
+    
+    def read(self, size=1024):
+        return os.read(self.fd, size)
+    
+    def terminate(self):
+        try:
+            os.kill(self.pid, 15)  # SIGTERM
+        except ProcessLookupError:
+            pass
+    
+    def poll(self):
+        try:
+            pid, status = os.waitpid(self.pid, os.WNOHANG)
+            if pid != 0:
+                self.returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+        except ChildProcessError:
+            self.returncode = -1
+        return self.returncode
+    
+    def fileno(self):
+        return self.fd
+    
+    def close(self):
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+
+def create_pty_process(cmd):
+    """Create a process with a pseudo-terminal."""
+    pid, fd = pty.fork()
+    
+    if pid == 0:
+        # Child process
+        os.execvp(cmd[0], cmd)
+    else:
+        # Parent process
+        # Set non-blocking
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        return PtyProcess(fd, pid)
+
 
 class TerminalManager:
     """Manage terminal sessions."""
@@ -795,31 +855,16 @@ class TerminalManager:
     def __init__(self):
         self.processes = {}
     
-    async def create_terminal(self, terminal_type: str, websocket: WebSocket):
-        """Create a new terminal session."""
-        container = detect_container()
-        if not container:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "data": "No AeroLab container detected. Please start your cluster first."
-            }))
-            return None
-        
+    def create_terminal_sync(self, terminal_type: str, container: str):
+        """Create a new terminal session with PTY support."""
         if terminal_type == "aql":
-            cmd = ['docker', 'exec', '-i', container, 'aql']
+            cmd = ['docker', 'exec', '-it', container, 'aql']
         elif terminal_type == "asadm":
-            cmd = ['docker', 'exec', '-i', container, 'asadm']
+            cmd = ['docker', 'exec', '-it', container, 'asadm']
         else:
-            cmd = ['docker', 'exec', '-i', container, '/bin/bash']
+            cmd = ['docker', 'exec', '-it', container, '/bin/bash']
         
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT
-        )
-        
-        return process
+        return create_pty_process(cmd)
 
 
 terminal_manager = TerminalManager()
@@ -827,25 +872,49 @@ terminal_manager = TerminalManager()
 
 @app.websocket("/ws/terminal/{terminal_type}")
 async def terminal_websocket(websocket: WebSocket, terminal_type: str):
-    """WebSocket endpoint for terminal sessions."""
+    """WebSocket endpoint for terminal sessions with PTY support."""
     await websocket.accept()
     
-    process = await terminal_manager.create_terminal(terminal_type, websocket)
+    container = detect_container()
+    if not container:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "data": "No AeroLab container detected. Please start your cluster first."
+        }))
+        await websocket.close()
+        return
+    
+    # Create PTY process
+    process = terminal_manager.create_terminal_sync(terminal_type, container)
     if not process:
+        await websocket.send_text(json.dumps({
+            "type": "error", 
+            "data": "Failed to create terminal session."
+        }))
         await websocket.close()
         return
     
     async def read_output():
-        """Read output from process and send to websocket."""
+        """Read output from PTY and send to websocket."""
         try:
             while True:
-                data = await process.stdout.read(1024)
-                if not data:
-                    break
-                await websocket.send_text(json.dumps({
-                    "type": "output",
-                    "data": data.decode('utf-8', errors='replace')
-                }))
+                # Check if there's data to read
+                readable, _, _ = select.select([process.fd], [], [], 0.1)
+                if readable:
+                    try:
+                        data = process.read(4096)
+                        if data:
+                            await websocket.send_text(json.dumps({
+                                "type": "output",
+                                "data": data.decode('utf-8', errors='replace')
+                            }))
+                    except OSError:
+                        break
+                else:
+                    # Check if process is still running
+                    if process.poll() is not None:
+                        break
+                    await asyncio.sleep(0.05)
         except Exception as e:
             pass
     
@@ -859,13 +928,18 @@ async def terminal_websocket(websocket: WebSocket, terminal_type: str):
             
             if data["type"] == "input":
                 try:
-                    process.stdin.write(data["data"].encode())
-                    await process.stdin.drain()
-                except (BrokenPipeError, ConnectionResetError):
+                    process.write(data["data"].encode())
+                except (BrokenPipeError, OSError):
                     break
             elif data["type"] == "resize":
-                # Handle terminal resize if needed
-                pass
+                # Handle terminal resize
+                try:
+                    cols = data.get("cols", 80)
+                    rows = data.get("rows", 24)
+                    winsize = struct.pack('HHHH', rows, cols, 0, 0)
+                    fcntl.ioctl(process.fd, termios.TIOCSWINSZ, winsize)
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -873,11 +947,8 @@ async def terminal_websocket(websocket: WebSocket, terminal_type: str):
     finally:
         output_task.cancel()
         try:
-            if process.returncode is None:
-                process.terminate()
-                await process.wait()
-        except ProcessLookupError:
-            pass
+            process.terminate()
+            process.close()
         except Exception:
             pass
 

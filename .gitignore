@@ -29,6 +29,13 @@ Thumbs.db
 # AeroLab
 aerolab/
 
+# Large binary downloads (Aerospike installers, etc.)
+*.tgz
+*.tar.gz
+*.deb
+*.rpm
+*.zip
+
 # Byte-compiled
 web/__pycache__/
 sc_tutorial/__pycache__/

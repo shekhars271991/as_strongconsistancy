@@ -17,6 +17,12 @@ let fitAddon = null;
 // =============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Restore sidebar collapse state
+    if (localStorage.getItem('sc-sidebar') === 'collapsed') {
+        const sb = document.getElementById('sidebar');
+        if (sb) sb.classList.add('collapsed');
+    }
+
     initNavigation();
     initTerminal();
     initTerminalTabs();
@@ -328,34 +334,65 @@ window.loadLesson = loadLesson;
 // TERMINAL
 // =============================================================================
 
+const TERM_THEMES = {
+    dark: {
+        background: '#0d1117',
+        foreground: '#e6edf3',
+        cursor: '#58a6ff',
+        cursorAccent: '#0d1117',
+        selection: 'rgba(88, 166, 255, 0.3)',
+        black: '#0d1117',
+        red: '#f85149',
+        green: '#3fb950',
+        yellow: '#d29922',
+        blue: '#58a6ff',
+        magenta: '#a371f7',
+        cyan: '#56d4dd',
+        white: '#e6edf3',
+        brightBlack: '#6e7681',
+        brightRed: '#ff7b72',
+        brightGreen: '#56d364',
+        brightYellow: '#e3b341',
+        brightBlue: '#79c0ff',
+        brightMagenta: '#d2a8ff',
+        brightCyan: '#76e3ea',
+        brightWhite: '#ffffff'
+    },
+    light: {
+        background: '#ffffff',
+        foreground: '#1f2328',
+        cursor: '#0969da',
+        cursorAccent: '#ffffff',
+        selection: 'rgba(9, 105, 218, 0.15)',
+        black: '#1f2328',
+        red: '#cf222e',
+        green: '#1a7f37',
+        yellow: '#9a6700',
+        blue: '#0969da',
+        magenta: '#8250df',
+        cyan: '#1b7c83',
+        white: '#f6f8fa',
+        brightBlack: '#6e7781',
+        brightRed: '#a40e26',
+        brightGreen: '#2da44e',
+        brightYellow: '#bf8700',
+        brightBlue: '#218bff',
+        brightMagenta: '#a475f9',
+        brightCyan: '#3192aa',
+        brightWhite: '#ffffff'
+    }
+};
+
+function getActiveTermTheme() {
+    return document.documentElement.classList.contains('light') ? TERM_THEMES.light : TERM_THEMES.dark;
+}
+
 function initTerminal() {
     terminal = new Terminal({
-        theme: {
-            background: '#0d1117',
-            foreground: '#e6edf3',
-            cursor: '#58a6ff',
-            cursorAccent: '#0d1117',
-            selection: 'rgba(88, 166, 255, 0.3)',
-            black: '#0d1117',
-            red: '#f85149',
-            green: '#3fb950',
-            yellow: '#d29922',
-            blue: '#58a6ff',
-            magenta: '#a371f7',
-            cyan: '#56d4dd',
-            white: '#e6edf3',
-            brightBlack: '#6e7681',
-            brightRed: '#ff7b72',
-            brightGreen: '#56d364',
-            brightYellow: '#e3b341',
-            brightBlue: '#79c0ff',
-            brightMagenta: '#d2a8ff',
-            brightCyan: '#76e3ea',
-            brightWhite: '#ffffff'
-        },
-        fontFamily: '"JetBrains Mono", "Fira Code", Consolas, monospace',
+        theme: getActiveTermTheme(),
+        fontFamily: '"IBM Plex Mono", Consolas, monospace',
         fontSize: 13,
-        lineHeight: 1.3,
+        lineHeight: 1.35,
         letterSpacing: 0,
         cursorBlink: true,
         cursorStyle: 'bar',
@@ -429,9 +466,12 @@ function initTerminal() {
                 iconMax.style.display = isMinimized ? 'block' : 'none';
             }
             
-            // Refit terminal when maximized
-            if (!isMinimized && fitAddon) {
-                setTimeout(() => fitAddon.fit(), 100);
+            // Refit and focus terminal when maximized
+            if (!isMinimized) {
+                setTimeout(() => {
+                    if (fitAddon) fitAddon.fit();
+                    if (terminal) terminal.focus();
+                }, 100);
             }
         });
     }
@@ -448,6 +488,20 @@ function initTerminalTabs() {
         tab.addEventListener('click', () => {
             const terminalType = tab.dataset.terminal;
             
+            // Auto-maximize if minimized
+            const panel = document.querySelector('.terminal-panel');
+            if (panel && panel.classList.contains('minimized')) {
+                panel.classList.remove('minimized');
+                const toggleBtn = document.getElementById('toggle-terminal');
+                if (toggleBtn) {
+                    toggleBtn.title = 'Minimize';
+                    const iconMin = toggleBtn.querySelector('.icon-minimize');
+                    const iconMax = toggleBtn.querySelector('.icon-maximize');
+                    if (iconMin) iconMin.style.display = 'block';
+                    if (iconMax) iconMax.style.display = 'none';
+                }
+            }
+
             // Update active tab
             document.querySelectorAll('.terminal-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
@@ -456,9 +510,10 @@ function initTerminalTabs() {
             currentTerminalType = terminalType;
             connectTerminal(terminalType);
             
-            // Refit terminal after tab switch
+            // Refit and focus terminal after tab switch
             setTimeout(() => {
                 if (fitAddon) fitAddon.fit();
+                if (terminal) terminal.focus();
             }, 50);
         });
     });
@@ -483,15 +538,24 @@ function connectTerminal(type) {
     
     terminalSocket.onopen = () => {
         updateTerminalStatus('connected');
-        terminal.clear();  // Clear the "connecting" message
+        terminal.clear();
+        terminal.focus();
     };
     
     terminalSocket.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.type === 'output') {
             terminal.write(message.data);
+            // Feed output to the AI monitoring buffer
+            if (typeof captureTerminalLine === 'function') {
+                const lines = message.data.split(/[\r\n]+/);
+                for (const line of lines) captureTerminalLine(line);
+            }
         } else if (message.type === 'error') {
             terminal.writeln(`\r\n\x1b[31m${message.data}\x1b[0m`);
+            if (typeof captureTerminalLine === 'function') {
+                captureTerminalLine(message.data);
+            }
         }
     };
     
@@ -707,20 +771,25 @@ function renderPrerequisites(data) {
     
     // Cluster configuration
     if (dockerOk && aerolabOk) {
+        // Determine current node count from cluster status
+        const currentNodes = currentNodeCount || 1;
+        
         html += `
             <div class="setup-step">
                 <h3>Cluster Configuration</h3>
                 <div class="setup-form">
                     <div class="form-group">
                         <label for="cluster-name">Cluster Name</label>
-                        <input type="text" id="cluster-name" value="mydc" placeholder="mydc">
+                        <input type="text" id="cluster-name" value="mydc" placeholder="mydc" ${hasCluster ? 'disabled' : ''}>
                     </div>
                     <div class="form-group">
-                        <label for="node-count">Number of Nodes</label>
-                        <select id="node-count">
-                            <option value="1" selected>1 node (development)</option>
-                            <option value="2">2 nodes</option>
-                            <option value="3">3 nodes (recommended)</option>
+                        <label for="node-count">Number of Nodes ${hasCluster ? `<span style="color: var(--text-muted);">(current: ${currentNodes})</span>` : ''}</label>
+                        <select id="node-count" onchange="onNodeCountChange(${currentNodes}, ${hasCluster ? 'true' : 'false'})">
+                            <option value="1" ${currentNodes === 1 ? 'selected' : ''}>1 node (development)</option>
+                            <option value="2" ${currentNodes === 2 ? 'selected' : ''}>2 nodes</option>
+                            <option value="3" ${currentNodes === 3 ? 'selected' : ''}>3 nodes (recommended)</option>
+                            <option value="4" ${currentNodes === 4 ? 'selected' : ''}>4 nodes</option>
+                            <option value="5" ${currentNodes === 5 ? 'selected' : ''}>5 nodes (max)</option>
                         </select>
                     </div>
                 </div>
@@ -729,12 +798,12 @@ function renderPrerequisites(data) {
         
         if (hasCluster) {
             html += `
-                <div class="setup-actions">
+                <div class="setup-actions" id="setup-actions">
                     <button class="btn btn-outline" onclick="destroyCluster('${hasCluster.replace('aerolab-', '').replace('_1', '')}')">
-                        Destroy Existing
+                        Destroy Cluster
                     </button>
-                    <button class="btn btn-primary" onclick="createCluster()">
-                        Reconfigure SC
+                    <button class="btn btn-primary" id="scale-btn" onclick="scaleFromDropdown(${currentNodes})" style="display: none;">
+                        Scale Cluster
                     </button>
                 </div>
             `;
@@ -982,6 +1051,9 @@ function finishSetup() {
 // CLUSTER STATUS
 // =============================================================================
 
+let currentNodeCount = 0;
+let isScaling = false;
+
 async function checkClusterStatus() {
     const statusEl = document.getElementById('cluster-status');
     const setupBtn = document.getElementById('setup-cluster-btn');
@@ -991,24 +1063,38 @@ async function checkClusterStatus() {
         const data = await response.json();
         
         if (data.status === 'ok') {
+            const nodes = parseInt(data.cluster_size) || parseInt(data.ns_cluster_size) || 0;
+            const roster = parseInt(data.ns_cluster_size) || 0;
+            currentNodeCount = nodes || 1;
+            const hasIssues = (data.diagnostics && data.diagnostics.length > 0) ||
+                              data.dead_partitions > 0 || data.unavailable_partitions > 0;
+            const indicatorClass = hasIssues ? 'warning' : 'ok';
+            
+            let statusText = `SC: ${data.strong_consistency ? '✓' : '✗'} | RF: ${data.replication_factor} | Nodes: ${nodes}`;
+            if (roster !== nodes && roster > 0) {
+                statusText += ` (Roster: ${roster})`;
+            }
+            
             statusEl.innerHTML = `
-                <div class="status-indicator ok"></div>
-                <span>
-                    SC: ${data.strong_consistency ? '✓' : '✗'} | 
-                    RF: ${data.replication_factor} | 
-                    Nodes: ${data.ns_cluster_size}
-                </span>
+                <div class="status-indicator ${indicatorClass}"></div>
+                <span>${statusText}</span>
             `;
-            statusEl.style.cursor = 'default';
-            statusEl.onclick = null;
-            if (setupBtn) setupBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Manage Cluster';
+            statusEl.style.cursor = 'pointer';
+            statusEl.onclick = () => openClusterManagement();
+            
+            if (setupBtn) {
+                setupBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Manage Cluster';
+                setupBtn.onclick = () => openClusterManagement();
+            }
         } else {
+            currentNodeCount = 0;
             statusEl.innerHTML = `
                 <div class="status-indicator error"></div>
                 <span>No cluster running</span>
             `;
             statusEl.style.cursor = 'pointer';
             statusEl.onclick = openSetupWizard;
+            
             if (setupBtn) setupBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg> Setup SC Cluster';
         }
     } catch (error) {
@@ -1017,5 +1103,717 @@ async function checkClusterStatus() {
             <span>Cannot reach server</span>
         `;
     }
+}
+
+
+function closeScaleModal() {
+    document.getElementById('scale-modal').style.display = 'none';
+}
+
+// Handle node count dropdown change
+function onNodeCountChange(currentNodes, hasCluster) {
+    const select = document.getElementById('node-count');
+    const scaleBtn = document.getElementById('scale-btn');
+    const newCount = parseInt(select.value);
+    
+    if (hasCluster && scaleBtn) {
+        if (newCount !== currentNodes) {
+            scaleBtn.style.display = 'inline-flex';
+            scaleBtn.textContent = newCount > currentNodes 
+                ? `Scale Up to ${newCount} nodes` 
+                : `Scale Down to ${newCount} nodes`;
+        } else {
+            scaleBtn.style.display = 'none';
+        }
+    }
+}
+
+// Scale cluster from dropdown selection
+function scaleFromDropdown(currentNodes) {
+    const select = document.getElementById('node-count');
+    const targetCount = parseInt(select.value);
+    
+    if (targetCount === currentNodes) return;
+    
+    // Close setup wizard and open cluster management view
+    closeSetupWizard();
+    openClusterManagement(currentNodes, targetCount);
+}
+
+// =============================================================================
+// Full Page Cluster Management
+// =============================================================================
+
+let cmCurrentNodes = 0;
+
+function openClusterManagement(currentNodes = null, targetNodes = null) {
+    const view = document.getElementById('cluster-management-view');
+    const appContainer = document.querySelector('.app-container');
+    
+    // Fetch current cluster status first
+    fetch('/api/cluster/status')
+        .then(res => res.json())
+        .then(data => {
+            cmCurrentNodes = parseInt(data.cluster_size) || parseInt(data.ns_cluster_size) || 0;
+            
+            // Update info cards
+            document.getElementById('cm-current-nodes').textContent = cmCurrentNodes || '-';
+            document.getElementById('cm-sc-mode').textContent = data.strong_consistency ? 'Enabled' : 'Disabled';
+            document.getElementById('cm-sc-mode').className = 'cm-info-value ' + (data.strong_consistency ? 'success' : 'warning');
+            document.getElementById('cm-rf').textContent = data.replication_factor || '-';
+            
+            const hasDiagnostics = data.diagnostics && data.diagnostics.length > 0;
+            const hasWarnings = data.warnings && data.warnings.length > 0;
+            const isHealthy = data.dead_partitions === 0 && data.unavailable_partitions === 0 && !hasDiagnostics;
+            document.getElementById('cm-health').textContent = isHealthy ? 'Healthy' : 'Issues';
+            document.getElementById('cm-health').className = 'cm-info-value ' + (isHealthy ? 'success' : 'error');
+            
+            // Show diagnostics and warnings in the logs panel
+            const logsEl = document.getElementById('cm-logs');
+            let logContent = 'Cluster management ready. Select target nodes and click "Scale Cluster" to begin.\n\n';
+            
+            if (hasDiagnostics) {
+                logContent += '⚠ DIAGNOSTICS\n';
+                logContent += '─'.repeat(50) + '\n';
+                data.diagnostics.forEach(d => { logContent += `  • ${d}\n`; });
+                logContent += '\n';
+            }
+            
+            if (hasWarnings) {
+                logContent += '⚠ RECENT WARNINGS FROM AEROSPIKE LOGS\n';
+                logContent += '─'.repeat(50) + '\n';
+                data.warnings.forEach(w => { logContent += `  ${w}\n`; });
+                logContent += '\n';
+            }
+            
+            if (!hasDiagnostics && !hasWarnings) {
+                logContent += 'No issues detected. Cluster is healthy.\n';
+            }
+            
+            logsEl.textContent = logContent;
+            
+            // Set target node dropdown
+            const targetSelect = document.getElementById('cm-target-nodes');
+            targetSelect.value = targetNodes || cmCurrentNodes || 2;
+            
+            // Show view
+            view.style.display = 'flex';
+            appContainer.style.display = 'none';
+            
+            // If target was provided, start scaling immediately
+            if (targetNodes && targetNodes !== cmCurrentNodes) {
+                setTimeout(() => startScaling(), 100);
+            }
+        })
+        .catch(err => {
+            console.error('Failed to fetch cluster status:', err);
+            view.style.display = 'flex';
+            appContainer.style.display = 'none';
+        });
+}
+
+function closeClusterManagement() {
+    const view = document.getElementById('cluster-management-view');
+    const appContainer = document.querySelector('.app-container');
+    
+    view.style.display = 'none';
+    appContainer.style.display = 'flex';
+    
+    // Refresh cluster status
+    checkClusterStatus();
+}
+
+function clearLogs() {
+    const logsEl = document.getElementById('cm-logs');
+    logsEl.innerHTML = 'Logs cleared. Ready for next operation.\n';
+}
+
+function resetClusterManagement() {
+    // Reset UI state
+    document.getElementById('cm-status-section').style.display = 'none';
+    document.getElementById('cm-actions').style.display = 'none';
+    document.getElementById('cm-scale-btn').disabled = false;
+    
+    // Refresh cluster info
+    openClusterManagement();
+}
+
+function startScaling() {
+    if (isScaling) return;
+    
+    const targetCount = parseInt(document.getElementById('cm-target-nodes').value);
+    const fromCount = cmCurrentNodes;
+    
+    if (targetCount === fromCount) {
+        appendLog('Target node count is same as current. No scaling needed.');
+        return;
+    }
+    
+    // Update UI
+    document.getElementById('cm-status-section').style.display = 'block';
+    document.getElementById('cm-from-nodes').textContent = fromCount;
+    document.getElementById('cm-to-nodes').textContent = targetCount;
+    document.getElementById('cm-op-status').textContent = 'Connecting...';
+    document.getElementById('cm-op-status').className = 'cm-op-status';
+    document.getElementById('cm-scale-btn').disabled = true;
+    document.getElementById('cm-actions').style.display = 'none';
+    
+    // Clear and prepare logs
+    const logsEl = document.getElementById('cm-logs');
+    const direction = targetCount > fromCount ? 'UP' : 'DOWN';
+    logsEl.innerHTML = '';
+    appendLog(`<span class="log-header">=== Cluster Scaling: ${fromCount} → ${targetCount} nodes ===</span>`);
+    appendLog('');
+    
+    isScaling = true;
+    
+    // Connect to WebSocket
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/cluster/scale`);
+    
+    ws.onopen = () => {
+        ws.send(JSON.stringify({
+            action: targetCount > fromCount ? 'scale_up' : 'scale_down',
+            current_count: fromCount,
+            target_count: targetCount
+        }));
+    };
+    
+    ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        
+        if (msg.type === 'log') {
+            appendLog(formatLogLine(msg.data));
+        } else if (msg.type === 'status') {
+            document.getElementById('cm-op-status').textContent = msg.data;
+        } else if (msg.type === 'complete') {
+            const statusEl = document.getElementById('cm-op-status');
+            statusEl.textContent = msg.success ? 'Complete!' : 'Failed';
+            statusEl.className = 'cm-op-status ' + (msg.success ? 'success' : 'error');
+            
+            document.getElementById('cm-actions').style.display = 'block';
+            document.getElementById('cm-scale-btn').disabled = false;
+            
+            // Update the dot indicator
+            document.querySelector('.cm-logs-dot').classList.add('inactive');
+            
+            isScaling = false;
+            
+            // Update cluster info
+            cmCurrentNodes = targetCount;
+            document.getElementById('cm-current-nodes').textContent = targetCount;
+            
+            if (msg.success) {
+                appendLog('');
+                appendLog('<span class="log-success">✓ Scaling operation completed successfully!</span>');
+            } else {
+                appendLog('');
+                appendLog(`<span class="log-error">✗ Scaling failed: ${msg.message || 'Unknown error'}</span>`);
+            }
+        }
+    };
+    
+    ws.onerror = () => {
+        document.getElementById('cm-op-status').textContent = 'Connection error';
+        document.getElementById('cm-op-status').className = 'cm-op-status error';
+        document.getElementById('cm-actions').style.display = 'block';
+        document.getElementById('cm-scale-btn').disabled = false;
+        isScaling = false;
+        appendLog('<span class="log-error">WebSocket connection error</span>');
+    };
+    
+    ws.onclose = () => {
+        if (isScaling) {
+            document.getElementById('cm-op-status').textContent = 'Disconnected';
+            document.getElementById('cm-actions').style.display = 'block';
+            document.getElementById('cm-scale-btn').disabled = false;
+            isScaling = false;
+        }
+    };
+}
+
+function appendLog(line) {
+    const logsEl = document.getElementById('cm-logs');
+    logsEl.innerHTML += line + '\n';
+    logsEl.scrollTop = logsEl.scrollHeight;
+}
+
+function formatLogLine(line) {
+    // Escape HTML
+    let escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    
+    // Highlight step markers
+    if (escaped.match(/^Step \d+:/i)) {
+        return `<span class="log-step">${escaped}</span>`;
+    }
+    
+    // Highlight commands (lines starting with $)
+    if (escaped.startsWith('$')) {
+        return `<span class="log-cmd">${escaped}</span>`;
+    }
+    
+    // Highlight success messages
+    if (escaped.toLowerCase().includes('done') || 
+        escaped.toLowerCase().includes('success') || 
+        escaped.toLowerCase().includes('complete') ||
+        escaped.toLowerCase().includes('stable')) {
+        return `<span class="log-success">${escaped}</span>`;
+    }
+    
+    // Highlight errors/warnings
+    if (escaped.toLowerCase().includes('error') || escaped.toLowerCase().includes('failed')) {
+        return `<span class="log-error">${escaped}</span>`;
+    }
+    if (escaped.toLowerCase().includes('warning') || escaped.toLowerCase().includes('warn')) {
+        return `<span class="log-warning">${escaped}</span>`;
+    }
+    
+    // Highlight section headers (=== ... ===)
+    if (escaped.startsWith('===')) {
+        return `<span class="log-header">${escaped}</span>`;
+    }
+    
+    return escaped;
+}
+
+// Old modal functions for backwards compatibility
+function closeScaleModal() {
+    document.getElementById('scale-modal').style.display = 'none';
+}
+
+// =============================================================================
+// INTERACTIVE GUIDED STEPS
+// =============================================================================
+
+const guidedProgress = {};
+
+function completeStep(guideId, stepNum) {
+    if (!guidedProgress[guideId]) guidedProgress[guideId] = new Set();
+    guidedProgress[guideId].add(stepNum);
+
+    const container = document.querySelector(`.guided-steps[data-guided="${guideId}"]`);
+    if (!container) return;
+
+    const steps = container.querySelectorAll('.guided-step');
+    let nextActivated = false;
+
+    steps.forEach(step => {
+        const num = parseInt(step.dataset.step);
+
+        if (guidedProgress[guideId].has(num)) {
+            step.className = 'guided-step completed';
+        } else if (!nextActivated) {
+            step.className = 'guided-step active';
+            nextActivated = true;
+            // Smooth-scroll the newly active step into view
+            setTimeout(() => {
+                step.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 150);
+        } else {
+            step.className = 'guided-step locked';
+        }
+    });
+
+    // Check if all steps done
+    if (guidedProgress[guideId].size >= steps.length) {
+        const summary = document.getElementById(`${guideId}-summary`);
+        if (summary) {
+            summary.style.display = 'block';
+            setTimeout(() => {
+                summary.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 200);
+        }
+    }
+}
+
+window.completeStep = completeStep;
+
+// =============================================================================
+// THEME TOGGLE
+// =============================================================================
+
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const collapsed = sidebar.classList.toggle('collapsed');
+    localStorage.setItem('sc-sidebar', collapsed ? 'collapsed' : 'expanded');
+    setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 280);
+}
+
+function toggleTheme() {
+    const root = document.documentElement;
+    const isLight = root.classList.toggle('light');
+    localStorage.setItem('sc-theme', isLight ? 'light' : 'dark');
+
+    const hljsDark = document.getElementById('hljs-dark');
+    const hljsLight = document.getElementById('hljs-light');
+    if (hljsDark && hljsLight) {
+        hljsDark.disabled = isLight;
+        hljsLight.disabled = !isLight;
+    }
+
+    if (terminal) {
+        terminal.options.theme = getActiveTermTheme();
+    }
+}
+
+// =============================================================================
+// AI CHAT
+// =============================================================================
+
+let chatOpen = false;
+let chatBusy = false;
+
+function toggleChat() {
+    chatOpen = !chatOpen;
+    const sidebar = document.getElementById('chat-sidebar');
+    const fab = document.getElementById('chat-fab');
+
+    if (chatOpen) {
+        sidebar.classList.add('open');
+        fab.classList.add('hidden');
+        setTimeout(() => {
+            document.getElementById('chat-input').focus();
+            if (fitAddon) fitAddon.fit();
+        }, 280);
+        checkApiKeyStatus();
+    } else {
+        sidebar.classList.remove('open');
+        fab.classList.remove('hidden');
+        closeChatSettings();
+        setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 280);
+    }
+}
+
+function clearChat() {
+    const messages = document.getElementById('chat-messages');
+    messages.innerHTML = `
+        <div class="chat-msg assistant">
+            <div class="chat-msg-content">
+                Chat cleared. Ask me anything about Aerospike Strong Consistency!
+            </div>
+        </div>
+    `;
+}
+
+function getChatContext() {
+    if (currentLesson >= 0 && currentLesson < LESSONS.length) {
+        const l = LESSONS[currentLesson];
+        return `Lesson ${l.id}: ${l.title}`;
+    }
+    return 'Welcome page';
+}
+
+function updateChatContext() {
+    const label = document.getElementById('chat-context-label');
+    if (label) {
+        label.textContent = 'Context: ' + getChatContext();
+    }
+}
+
+function handleChatKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
+    // Auto-resize textarea
+    const el = e.target;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 100) + 'px';
+}
+
+async function sendChatMessage() {
+    if (chatBusy) return;
+    const input = document.getElementById('chat-input');
+    const message = input.value.trim();
+    if (!message) return;
+
+    const messages = document.getElementById('chat-messages');
+
+    // Add user message
+    const userDiv = document.createElement('div');
+    userDiv.className = 'chat-msg user';
+    userDiv.innerHTML = `<div class="chat-msg-content">${escapeHtml(message)}</div>`;
+    messages.appendChild(userDiv);
+
+    // Clear input
+    input.value = '';
+    input.style.height = 'auto';
+
+    // Add typing indicator
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'chat-msg assistant';
+    typingDiv.id = 'chat-typing';
+    typingDiv.innerHTML = '<div class="chat-typing"><span></span><span></span><span></span></div>';
+    messages.appendChild(typingDiv);
+    messages.scrollTop = messages.scrollHeight;
+
+    chatBusy = true;
+    document.getElementById('chat-send-btn').disabled = true;
+
+    try {
+        const resp = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: message,
+                lesson_context: getChatContext()
+            })
+        });
+        const data = await resp.json();
+
+        // Remove typing indicator
+        const typing = document.getElementById('chat-typing');
+        if (typing) typing.remove();
+
+        // Add assistant response
+        const assistantDiv = document.createElement('div');
+        assistantDiv.className = 'chat-msg assistant';
+        if (data.error) {
+            assistantDiv.innerHTML = `<div class="chat-msg-content" style="border-color:var(--accent-error);color:var(--accent-error);">${escapeHtml(data.error)}</div>`;
+        } else {
+            assistantDiv.innerHTML = `<div class="chat-msg-content">${renderMarkdown(data.answer)}</div>`;
+        }
+        messages.appendChild(assistantDiv);
+    } catch (err) {
+        const typing = document.getElementById('chat-typing');
+        if (typing) typing.remove();
+        const errDiv = document.createElement('div');
+        errDiv.className = 'chat-msg assistant';
+        errDiv.innerHTML = `<div class="chat-msg-content" style="border-color:var(--accent-error);color:var(--accent-error);">Network error. Please try again.</div>`;
+        messages.appendChild(errDiv);
+    }
+
+    chatBusy = false;
+    document.getElementById('chat-send-btn').disabled = false;
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function renderMarkdown(text) {
+    // Code blocks
+    text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+        return `<pre><code>${escapeHtml(code.trim())}</code></pre>`;
+    });
+    // Inline code
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Bold
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic
+    text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    // Unordered lists
+    text = text.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+    text = text.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // Ordered lists
+    text = text.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+    // Paragraphs (double newline)
+    text = text.replace(/\n\n/g, '</p><p>');
+    // Single newlines inside paragraphs
+    text = text.replace(/\n/g, '<br>');
+    return '<p>' + text + '</p>';
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// Settings
+function openChatSettings() {
+    document.getElementById('chat-settings').style.display = 'block';
+    document.getElementById('chat-messages').style.display = 'none';
+    document.querySelector('.chat-input-area').style.display = 'none';
+    checkApiKeyStatus();
+}
+
+function closeChatSettings() {
+    document.getElementById('chat-settings').style.display = 'none';
+    document.getElementById('chat-messages').style.display = 'flex';
+    document.querySelector('.chat-input-area').style.display = 'block';
+}
+
+async function checkApiKeyStatus() {
+    try {
+        const resp = await fetch('/api/admin/apikey');
+        const data = await resp.json();
+        const statusEl = document.getElementById('api-key-status');
+        const badge = document.getElementById('chat-badge');
+        if (data.configured) {
+            statusEl.textContent = `Key configured: ${data.masked}`;
+            statusEl.style.color = 'var(--accent-secondary)';
+            if (badge) badge.style.display = 'inline';
+        } else {
+            statusEl.textContent = 'No API key configured.';
+            statusEl.style.color = 'var(--accent-warning)';
+            if (badge) badge.style.display = 'none';
+        }
+    } catch (e) {
+        // ignore
+    }
+}
+
+async function saveApiKey() {
+    const input = document.getElementById('api-key-input');
+    const key = input.value.trim();
+    if (!key) return;
+
+    try {
+        const resp = await fetch('/api/admin/apikey', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: key })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            input.value = '';
+            checkApiKeyStatus();
+            closeChatSettings();
+        } else {
+            const statusEl = document.getElementById('api-key-status');
+            statusEl.textContent = data.error;
+            statusEl.style.color = 'var(--accent-error)';
+        }
+    } catch (e) {
+        // ignore
+    }
+}
+
+// Update chat context whenever lesson changes
+const _originalLoadLesson = loadLesson;
+window.loadLesson = function(lessonId) {
+    _originalLoadLesson(lessonId);
+    updateChatContext();
+};
+
+// =============================================================================
+// TERMINAL OUTPUT MONITORING — Auto-AI on errors & notable output
+// =============================================================================
+
+const terminalOutputBuffer = [];
+const BUFFER_MAX = 80;
+let autoAnalyzeTimer = null;
+let lastAnalyzedSnippet = '';
+
+const ERROR_PATTERNS = [
+    /Error:\s*\(-?\d+\)/i,
+    /AEROSPIKE_ERR/i,
+    /error\s*code/i,
+    /PARTITION_UNAVAILABLE/i,
+    /INVALID_NODE_ERROR/i,
+    /not found for partition/i,
+    /FAIL_FORBIDDEN/i,
+    /FORBIDDEN/i,
+    /Generation error/i,
+    /Traceback \(most recent/i,
+    /exception\./i,
+    /Connection refused/i,
+    /timed?\s*out/i,
+    /dead_partitions/i,
+    /unavailable_partitions/i,
+];
+
+const SUCCESS_PATTERNS = [
+    /OK,\s*\d+\s+record/i,
+    /Successfully started recluster/i,
+    /Pending roster now contains/i,
+    /1 row in set/i,
+];
+
+function captureTerminalLine(text) {
+    const cleaned = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
+    if (!cleaned || cleaned.length < 3) return;
+
+    terminalOutputBuffer.push(cleaned);
+    if (terminalOutputBuffer.length > BUFFER_MAX) {
+        terminalOutputBuffer.splice(0, terminalOutputBuffer.length - BUFFER_MAX);
+    }
+
+    // Debounce: wait 1.5s of quiet before analyzing
+    clearTimeout(autoAnalyzeTimer);
+    autoAnalyzeTimer = setTimeout(() => analyzeRecentOutput(), 1500);
+}
+
+function analyzeRecentOutput() {
+    const recent = terminalOutputBuffer.slice(-20).join('\n');
+    if (!recent || recent === lastAnalyzedSnippet) return;
+
+    let isError = false;
+    let isSuccess = false;
+
+    for (const pat of ERROR_PATTERNS) {
+        if (pat.test(recent)) { isError = true; break; }
+    }
+    if (!isError) {
+        for (const pat of SUCCESS_PATTERNS) {
+            if (pat.test(recent)) { isSuccess = true; break; }
+        }
+    }
+
+    if (!isError && !isSuccess) return;
+
+    lastAnalyzedSnippet = recent;
+
+    const snippet = terminalOutputBuffer.slice(-15).join('\n');
+    autoExplainOutput(snippet, isError);
+}
+
+async function autoExplainOutput(snippet, isError) {
+    if (chatBusy) return;
+    const apiKey = await fetch('/api/admin/apikey').then(r => r.json()).catch(() => null);
+    if (!apiKey || !apiKey.configured) return;
+
+    // Open chat panel if closed
+    if (!chatOpen) toggleChat();
+
+    const messages = document.getElementById('chat-messages');
+
+    // Show system message about what triggered the auto-analysis
+    const sysDiv = document.createElement('div');
+    sysDiv.className = 'chat-msg system';
+    sysDiv.innerHTML = `<div class="chat-msg-content">${isError ? 'Error detected' : 'Command succeeded'} in ${currentTerminalType.toUpperCase()} terminal — analyzing...</div>`;
+    messages.appendChild(sysDiv);
+
+    // Show typing indicator
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'chat-msg assistant';
+    typingDiv.id = 'chat-typing';
+    typingDiv.innerHTML = '<div class="chat-typing"><span></span><span></span><span></span></div>';
+    messages.appendChild(typingDiv);
+    messages.scrollTop = messages.scrollHeight;
+
+    chatBusy = true;
+
+    const prompt = isError
+        ? `The user just got this output/error in their ${currentTerminalType.toUpperCase()} terminal while learning about Aerospike Strong Consistency. Explain what went wrong, why it happened, and what they should do to fix it. Be concise and helpful.\n\nTerminal output:\n\`\`\`\n${snippet}\n\`\`\``
+        : `The user just ran a command in their ${currentTerminalType.toUpperCase()} terminal while learning about Aerospike Strong Consistency. Briefly explain what happened and what they should notice in the output. Be concise.\n\nTerminal output:\n\`\`\`\n${snippet}\n\`\`\``;
+
+    try {
+        const resp = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: prompt,
+                lesson_context: getChatContext()
+            })
+        });
+        const data = await resp.json();
+
+        const typing = document.getElementById('chat-typing');
+        if (typing) typing.remove();
+
+        const assistantDiv = document.createElement('div');
+        assistantDiv.className = 'chat-msg assistant';
+        if (data.error) {
+            assistantDiv.innerHTML = `<div class="chat-msg-content" style="border-color:var(--accent-error);color:var(--accent-error);">${escapeHtml(data.error)}</div>`;
+        } else {
+            assistantDiv.innerHTML = `<div class="chat-msg-content">${renderMarkdown(data.answer)}</div>`;
+        }
+        messages.appendChild(assistantDiv);
+    } catch (err) {
+        const typing = document.getElementById('chat-typing');
+        if (typing) typing.remove();
+    }
+
+    chatBusy = false;
+    messages.scrollTop = messages.scrollHeight;
 }
 

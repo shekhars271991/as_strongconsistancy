@@ -110,10 +110,10 @@ QUICK SC SETUP (3 commands):
   # 1. Set Docker as backend
   aerolab config backend -t docker
   
-  # 2. Create cluster with your feature key
-  aerolab cluster create -n mydc -c 1 -f /path/to/features.conf
+  # 2. Create 3-node cluster (SC with RF=2 needs at least 2 nodes; 3 recommended)
+  aerolab cluster create -n mydc -c 3 -f /path/to/features.conf
   
-  # 3. Enable Strong Consistency
+  # 3. Enable Strong Consistency (configures SC + roster automatically)
   aerolab conf sc -n mydc
 
 That's it! Your SC cluster is ready.

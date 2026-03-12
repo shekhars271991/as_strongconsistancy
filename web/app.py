@@ -50,11 +50,19 @@ LESSONS = [
         <pre><code># 1. Set Docker as backend
 aerolab config backend -t docker
 
-# 2. Create cluster with your feature key
-aerolab cluster create -n mydc -c 1 -f features.conf
+# 2. Create a 3-node cluster with your feature key
+#    SC requires nodes >= replication-factor (RF=2 needs at least 2 nodes,
+#    but 3 nodes is recommended for fault tolerance)
+aerolab cluster create -n mydc -c 3 -f features.conf
 
-# 3. Enable Strong Consistency
+# 3. Enable Strong Consistency (configures SC + roster automatically)
 aerolab conf sc -n mydc</code></pre>
+
+        <div class="info-box">
+            <strong>Why 3 nodes?</strong> With RF=2, a 3-node cluster can tolerate 1 node failure.
+            A 2-node RF=2 cluster has zero fault tolerance (both nodes are required).
+            For single-node dev/test, set <code>replication-factor 1</code> in the config.
+        </div>
 
         <h3>Verify SC is Enabled</h3>
         <pre><code>aerolab cluster list
@@ -113,45 +121,133 @@ aerolab attach shell -n mydc      # Shell into container</code></pre>
         "icon": "",
         "category": "setup",
         "content": f"""
-        <h3>Step 1: Enable SC in Namespace Configuration</h3>
-        <pre><code># In aerospike.conf:
+        <p>In this lesson you'll explore how an SC namespace is configured and learn
+        the <strong>roster</strong> — the single most important SC concept.
+        Follow each step below using the terminal tabs on the right.</p>
 
-namespace sc_namespace {{
-    strong-consistency true     # Enable SC mode
-    replication-factor 2        # RF must match cluster size
-    default-ttl 0               # Recommended: disable expiration
-    nsup-period 0               # Disable supervisor
-    
-    storage-engine memory {{
-        file /opt/aerospike/data/sc.dat
-        filesize 2G
-    }}
-}}</code></pre>
+        <div class="guided-steps" data-guided="lesson2">
 
-        <h3>Key Configuration Parameters</h3>
-        <ul>
-            <li><code>strong-consistency true</code> - Enables SC mode</li>
-            <li><code>replication-factor N</code> - SC requires nodes ≥ RF (RF=1 for single-node)</li>
-            <li><code>default-ttl 0</code> - Disable expiration (recommended)</li>
-            <li><code>commit-to-device true</code> - Optional: ensures durability</li>
-        </ul>
+            <!-- Step 1 -->
+            <div class="guided-step active" data-step="1">
+                <div class="guided-step-header">
+                    <span class="guided-step-num">1</span>
+                    <span class="guided-step-title">Check if SC is enabled</span>
+                    <span class="guided-step-status"></span>
+                </div>
+                <div class="guided-step-body">
+                    <p>Open the <strong>Shell</strong> tab and run this command to check the namespace configuration:</p>
+                    <pre><code>asinfo -v "namespace/test" | tr ';' '\\n' | grep -E "strong-consistency|replication-factor"</code></pre>
+                    <div class="guided-step-expect">
+                        <strong>You should see:</strong><br>
+                        <code>strong-consistency=true</code> and <code>replication-factor=2</code>
+                    </div>
+                    <p class="guided-step-why">This confirms your namespace is running in SC mode with 2 copies of every record.</p>
+                    <button class="btn btn-primary btn-sm guided-done-btn" onclick="completeStep('lesson2', 1)">Done — I can see it</button>
+                </div>
+            </div>
 
-        <h3>Step 2: Configure the Roster</h3>
-        <p>The <strong>ROSTER</strong> is a list of nodes expected in the cluster for an SC namespace.</p>
-        
-        <pre><code># View roster status
-asinfo -v "roster:namespace=test"
+            <!-- Step 2 -->
+            <div class="guided-step locked" data-step="2">
+                <div class="guided-step-header">
+                    <span class="guided-step-num">2</span>
+                    <span class="guided-step-title">View the current roster</span>
+                    <span class="guided-step-status"></span>
+                </div>
+                <div class="guided-step-body">
+                    <p>Switch to the <strong>ASADM</strong> tab and run:</p>
+                    <pre><code>show roster</code></pre>
+                    <div class="guided-step-expect">
+                        <strong>Look for three columns:</strong><br>
+                        <code>Current Roster</code> — the active list of trusted nodes<br>
+                        <code>Pending Roster</code> — staged changes waiting for recluster<br>
+                        <code>Observed Nodes</code> — nodes the cluster currently sees
+                    </div>
+                    <p class="guided-step-why">The roster is what makes SC special — only nodes on the roster can hold master/replica copies.
+                    If a node isn't on the roster, the cluster doesn't trust it with data.</p>
+                    <button class="btn btn-primary btn-sm guided-done-btn" onclick="completeStep('lesson2', 2)">Done — I see the roster</button>
+                </div>
+            </div>
 
-# Using asadm (easier)
-asadm> manage roster stage observed ns test
-asadm> manage recluster</code></pre>
+            <!-- Step 3 -->
+            <div class="guided-step locked" data-step="3">
+                <div class="guided-step-header">
+                    <span class="guided-step-num">3</span>
+                    <span class="guided-step-title">Compare cluster_size vs ns_cluster_size</span>
+                    <span class="guided-step-status"></span>
+                </div>
+                <div class="guided-step-body">
+                    <p>Still in <strong>ASADM</strong>, run:</p>
+                    <pre><code>show stat -flip like cluster_size</code></pre>
+                    <div class="guided-step-expect">
+                        <strong>You should see two numbers:</strong><br>
+                        <code>cluster_size</code> — total nodes in the network cluster<br>
+                        <code>ns_cluster_size</code> — nodes on the SC roster for this namespace<br><br>
+                        When these match, every node is on the roster. If <code>cluster_size &gt; ns_cluster_size</code>,
+                        a node has joined but hasn't been added to the roster yet.
+                    </div>
+                    <p class="guided-step-why">This is the first thing to check when debugging SC issues — a mismatch
+                    means the roster needs updating.</p>
+                    <button class="btn btn-primary btn-sm guided-done-btn" onclick="completeStep('lesson2', 3)">Done — numbers match</button>
+                </div>
+            </div>
 
-        <div class="info-box">
-            <strong>Key Points:</strong>
+            <!-- Step 4 -->
+            <div class="guided-step locked" data-step="4">
+                <div class="guided-step-header">
+                    <span class="guided-step-num">4</span>
+                    <span class="guided-step-title">Check partition health</span>
+                    <span class="guided-step-status"></span>
+                </div>
+                <div class="guided-step-body">
+                    <p>Run this in <strong>ASADM</strong> to see if all partitions are healthy:</p>
+                    <pre><code>show stat namespace for test like dead_partitions -flip
+show stat namespace for test like unavailable_partitions -flip</code></pre>
+                    <div class="guided-step-expect">
+                        <strong>Both should show 0</strong> on every node.<br>
+                        <code>dead_partitions = 0</code> — no data loss<br>
+                        <code>unavailable_partitions = 0</code> — all data accessible
+                    </div>
+                    <p class="guided-step-why">These two metrics are the heartbeat of an SC cluster.
+                    In later lessons you'll see what happens when nodes go down and these numbers change.</p>
+                    <button class="btn btn-primary btn-sm guided-done-btn" onclick="completeStep('lesson2', 4)">Done — all zeros</button>
+                </div>
+            </div>
+
+            <!-- Step 5 -->
+            <div class="guided-step locked" data-step="5">
+                <div class="guided-step-header">
+                    <span class="guided-step-num">5</span>
+                    <span class="guided-step-title">View the full namespace config</span>
+                    <span class="guided-step-status"></span>
+                </div>
+                <div class="guided-step-body">
+                    <p>Finally, see all the SC-related settings at once in <strong>ASADM</strong>:</p>
+                    <pre><code>show config namespace for test like strong-consistency
+show config namespace for test like commit-to-device
+show config namespace for test like default-ttl</code></pre>
+                    <div class="guided-step-expect">
+                        <strong>Key settings to note:</strong><br>
+                        <code>strong-consistency = true</code> — SC is on<br>
+                        <code>commit-to-device = false</code> — default (enable for max durability)<br>
+                        <code>default-ttl = 0</code> — no expiration (recommended for SC)
+                    </div>
+                    <p class="guided-step-why">Now you've seen the full picture: SC mode is a namespace-level
+                    setting, the roster controls which nodes participate, and partition health
+                    tells you if everything is working.</p>
+                    <button class="btn btn-primary btn-sm guided-done-btn" onclick="completeStep('lesson2', 5)">Done — lesson complete!</button>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="guided-summary" id="lesson2-summary" style="display:none;">
+            <h3>Summary</h3>
             <ul>
-                <li>Roster is stored persistently in a distributed table</li>
-                <li>Nodes not on the roster cannot participate in SC operations</li>
-                <li>Changes require a 'recluster' command</li>
+                <li><code>strong-consistency true</code> enables SC on a namespace (cannot switch from AP later)</li>
+                <li>The <strong>roster</strong> is the list of trusted nodes — only roster nodes hold data</li>
+                <li><code>cluster_size</code> vs <code>ns_cluster_size</code> tells you if all nodes are on the roster</li>
+                <li><code>dead_partitions</code> and <code>unavailable_partitions</code> are the two key health metrics</li>
+                <li><code>commit-to-device</code>, <code>default-ttl 0</code>, and <code>node-id</code> are important optional settings</li>
             </ul>
         </div>
         """
@@ -341,6 +437,30 @@ print(f"After update: {{bins}}, gen={{meta['gen']}}")</code></pre>
             </div>
         </div>
 
+        <h3>Relaxed Read Modes</h3>
+        <p>SC also provides two <strong>relaxed</strong> read policies that trade strict monotonicity for better availability:</p>
+
+        <div class="card">
+            <h4>3. ALLOW_REPLICA</h4>
+            <ul>
+                <li>Allows reads from <strong>replica partitions</strong> (not just the master)</li>
+                <li>Reads are still committed records, but no longer strictly monotonic</li>
+                <li>Prevents read timeouts when a node/rack goes down</li>
+                <li>Enables <code>PREFER_RACK</code> policy to reduce cross-AZ traffic</li>
+                <li>In practice, session consistency violations are very rare</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h4>4. ALLOW_UNAVAILABLE</h4>
+            <ul>
+                <li>Allows reads from <strong>unavailable partitions</strong> (previously committed data)</li>
+                <li>Stale reads possible, but never dirty (uncommitted) reads</li>
+                <li>Useful for applications sensitive to read unavailability</li>
+                <li>When partitions are available, behaves identically to ALLOW_REPLICA</li>
+            </ul>
+        </div>
+
         <div class="exercise-box">
             <h4>Exercise: Check Consistency Configuration</h4>
             <p>View the current consistency settings in <strong>ASADM</strong>:</p>
@@ -355,8 +475,13 @@ print(f"After update: {{bins}}, gen={{meta['gen']}}")</code></pre>
             </ol>
             
             <div class="info-box">
-                Linearizable reads are ~20-50% slower due to replica verification.
-                Only use when multiple clients must see the exact same state simultaneously.
+                <strong>Performance Guide:</strong>
+                <ul>
+                    <li>Session Consistency (default) — best balance of safety and speed</li>
+                    <li>Linearizable — ~20-50% slower due to replica regime checks</li>
+                    <li>ALLOW_REPLICA — same performance, better availability during failures</li>
+                    <li>ALLOW_UNAVAILABLE — maximum read availability during major outages</li>
+                </ul>
             </div>
         </div>
         """
@@ -1364,13 +1489,16 @@ tail -f /var/log/aerospike/aerospike.log | grep -i error</code></pre>
         SC guarantees can be violated.</p>
 
         <div class="warning-box">
-            <strong>Critical Thresholds:</strong>
+            <strong>Critical Thresholds (default heartbeat configuration):</strong>
             <ul>
-                <li><strong>15 seconds</strong> - Warning logged about clock skew</li>
-                <li><strong>20 seconds</strong> - Writes are BLOCKED (forbidden error)</li>
-                <li><strong>27 seconds</strong> - Potential data loss if writes were allowed</li>
+                <li><strong>≤10 seconds</strong> — Well within acceptable limits, no action needed</li>
+                <li><strong>~12 seconds</strong> — Warnings logged to provide early notification</li>
+                <li><strong>~17 seconds</strong> — <code>stop-writes</code> mode activated, writes are BLOCKED (forbidden error)</li>
+                <li><strong>~23 seconds</strong> — Potential data loss if writes were somehow allowed</li>
             </ul>
-            <p>These thresholds are based on default heartbeat interval (150ms) and timeout (10).</p>
+            <p>These thresholds scale with the heartbeat <code>interval</code> (default 150ms) and 
+            <code>timeout</code> (default 10). Changing those values changes the skew tolerances accordingly.
+            The clock skew threshold for data loss is approximately 27 seconds with default settings.</p>
         </div>
 
         <h3>How Aerospike Protects You</h3>
@@ -1660,10 +1788,41 @@ namespace sc_namespace {{
             using read-modify-write pattern with generation checks.</p>
         </div>
 
+        <h3>Durability Exceptions</h3>
+        <p>These scenarios can cause data loss even with SC enabled:</p>
+
+        <div class="card">
+            <h4>Incorrect Roster Management</h4>
+            <p>Reducing the roster by <code>replication-factor</code> or more nodes at a time may result in 
+            record data loss. Always follow the safe add/remove procedures — remove one node at a time
+            and wait for migrations.</p>
+        </div>
+
+        <div class="card">
+            <h4>Partial Storage Erasure</h4>
+            <p>If some sectors or portions of a drive are erased (e.g., malicious action or partial drive failure) 
+            on RF or more nodes, Aerospike <strong>cannot detect the loss</strong>. Records may be silently lost.</p>
+        </div>
+
+        <div class="card">
+            <h4>Simultaneous Server Restarts</h4>
+            <p>By default, writes are buffered before flushing to disk. If RF nodes crash within 
+            <code>flush-max-ms</code> of each other, buffered writes may be lost. Mitigate with 
+            <code>commit-to-device true</code> or rack-aware multi-AZ deployments.</p>
+        </div>
+
+        <div class="card">
+            <h4>Storage Hardware Failure</h4>
+            <p>When all roster nodes are online but some partition data is missing (e.g., storage wiped 
+            or lost while <code>asd</code> was down), partitions become <code>dead_partitions</code>. 
+            Use <code>revive</code> or restore from backup.</p>
+        </div>
+
         <h3>Per-Record Consistency</h3>
         <div class="info-box">
             SC guarantees are <strong>per-record only</strong>. There are no multi-record transaction semantics.
             Each write is atomic and isolated, but there's no way to atomically update multiple records.
+            (Aerospike Database 8+ introduces multi-record transactions for SC namespaces.)
         </div>
         """
     },
@@ -1841,6 +2000,413 @@ namespace sc_namespace {{
             <li>Monitor latency metrics and adjust client timeouts accordingly</li>
         </ul>
         """
+    },
+    {
+        "id": 25,
+        "title": "Quiescing Nodes",
+        "short": "Quiesce",
+        "icon": "",
+        "category": "operations",
+        "content": f"""
+        <p>
+            Quiescing enables smooth master handoff before removing a node from the cluster,
+            preventing transaction timeouts during maintenance operations.
+        </p>
+
+        <h3>What is Quiescing?</h3>
+        <p>
+            When a node is quiesced, it's placed at the end of every partition's succession list.
+            This causes the quiesced node to hand off master status to a non-quiesced node.
+        </p>
+        
+        <div class="info-box">
+            <strong>Key Benefits:</strong>
+            <ul>
+                <li>Prevents "master gap" - time when no master is available</li>
+                <li>Transactions are proxied during handoff instead of timing out</li>
+                <li>Quiesced node keeps data for faster re-sync when it returns</li>
+            </ul>
+        </div>
+
+        <h3>Quiesce Procedure</h3>
+
+        <div class="exercise-box">
+            <h4>Step 1: Verify Cluster is Stable</h4>
+            <p>Check no migrations are in progress:</p>
+            <pre><code>Admin> info network</code></pre>
+            <p>Ensure all nodes show same cluster key and Migrations = 0</p>
+        </div>
+
+        <div class="exercise-box">
+            <h4>Step 2: Issue Quiesce Command</h4>
+            <p>Quiesce the node you want to remove:</p>
+            <pre><code>Admin+> manage quiesce with &lt;node-ip-or-name&gt;</code></pre>
+            
+            <p>Verify with:</p>
+            <pre><code>Admin+> show statistics like pending_quiesce</code></pre>
+            <p>Should show <code>pending_quiesce=true</code> for the target node.</p>
+        </div>
+
+        <div class="exercise-box">
+            <h4>Step 3: Trigger Recluster</h4>
+            <p>This performs the master handoff:</p>
+            <pre><code>Admin+> manage recluster</code></pre>
+            
+            <p>Verify with:</p>
+            <pre><code>Admin+> show statistics like quiesce</code></pre>
+            <p>Check <code>effective_is_quiesced=true</code> and <code>nodes_quiesced=1</code></p>
+        </div>
+
+        <div class="exercise-box">
+            <h4>Step 4: Wait for Proxy Completion</h4>
+            <p>Check traffic has moved away from quiesced node:</p>
+            <pre><code>Admin+> show latencies</code></pre>
+            <p>ops/sec should be 0 for the quiesced node.</p>
+            
+            <p>Check proxies have completed:</p>
+            <pre><code>Admin+> show statistics like client_proxy</code></pre>
+            <p>Counters should stop incrementing.</p>
+        </div>
+
+        <div class="exercise-box">
+            <h4>Step 5: Stop the Node</h4>
+            <p>Now safe to stop the quiesced node:</p>
+            <pre><code>systemctl stop aerospike</code></pre>
+            <p>Or for Docker: <code>docker stop &lt;container&gt;</code></p>
+        </div>
+
+        <h3>Undoing a Quiesce</h3>
+        <p>If you quiesced the wrong node:</p>
+        <pre><code>Admin+> manage quiesce undo with &lt;node&gt;</code></pre>
+
+        <div class="warning-box">
+            <strong>Important Notes:</strong>
+            <ul>
+                <li>Quiescing affects ALL namespaces on the node</li>
+                <li>Cannot quiesce individual namespaces</li>
+                <li>If all nodes are quiesced, recluster is ignored</li>
+                <li>For RF1 namespaces, wait for migrations before stopping</li>
+            </ul>
+        </div>
+
+        <h3>Quiescing for Extra Durability</h3>
+        <p>
+            In RF2 clusters, quiescing before node removal ensures two full copies exist
+            when the node is removed. This provides protection if another node fails
+            before the first returns.
+        </p>
+
+        <h3>Try It: Simulate Node Maintenance</h3>
+        <p>Use the Manage Cluster button to scale down - it will automatically quiesce nodes!</p>
+        """
+    },
+    {
+        "id": 26,
+        "title": "Rack Awareness for SC",
+        "short": "Rack Awareness",
+        "icon": "",
+        "category": "operations",
+        "content": f"""
+        <h3>Why Rack Awareness?</h3>
+        <p>Rack awareness places master and replica copies on separate racks (typically different 
+        Availability Zones). This reduces the chance of RF nodes failing simultaneously and enables 
+        rack-local reads to cut cross-zone network costs.</p>
+
+        <h3>How Racks Work in SC</h3>
+        <p>In SC mode, rack information is carried <strong>on the roster</strong> as <code>node-id@rack-id</code> pairs.
+        The rack-id in the config file populates the <code>observed_nodes</code> list, which you then 
+        stage as the roster.</p>
+
+        <h3>Step 1: Configure rack-id on Each Node</h3>
+        <pre><code># In aerospike.conf (each node)
+namespace test {{
+    replication-factor 2
+    strong-consistency true
+    rack-id 101          # Set per-node rack identity
+    
+    storage-engine device {{
+        file /opt/aerospike/data/test.dat
+        filesize 4G
+    }}
+}}</code></pre>
+
+        <div class="info-box">
+            <strong>Note:</strong> In SC mode, the <code>rack-id</code> config is only used to populate
+            the <code>observed_nodes</code> list. The actual rack assignment comes from what is set
+            in the roster at the time of <code>recluster</code>.
+        </div>
+
+        <h3>Step 2: Set the Roster with Rack IDs</h3>
+        <pre><code># In ASADM:
+enable
+
+# Stage observed nodes (includes @rack-id automatically)
+manage roster stage observed ns test
+
+# Apply
+manage recluster
+
+# Verify racks
+show racks</code></pre>
+
+        <h3>Dynamic Rack Reassignment</h3>
+        <p>You can change rack assignments at runtime without restarting nodes:</p>
+        <pre><code># Assign nodes to rack 101
+manage config namespace test param rack-id to 101 with &lt;node1_ip&gt; &lt;node2_ip&gt;
+
+# Assign other nodes to rack 102
+manage config namespace test param rack-id to 102 with &lt;node3_ip&gt;
+
+# Re-roster and recluster to apply
+manage roster stage observed ns test
+manage recluster</code></pre>
+
+        <h3>Rack-Aware Reads (Client Configuration)</h3>
+        <p>Clients can prefer reading from the local rack to reduce cross-zone traffic:</p>
+        <pre><code># Python example
+read_policy = {{
+    'read_mode_sc': aerospike.POLICY_READ_MODE_SC_ALLOW_REPLICA,
+    'replica': aerospike.POLICY_REPLICA_PREFER_RACK
+}}
+
+# Set rack ID when connecting
+config = {{
+    'hosts': [('node1', 3000)],
+    'policies': {{'read': read_policy}},
+    'rack_id': 101,
+    'rack_aware': True
+}}</code></pre>
+
+        <div class="info-box">
+            <strong>Best Practice:</strong> Use <code>ALLOW_REPLICA</code> read mode with 
+            <code>PREFER_RACK</code> to get rack-local reads. This prevents read timeouts 
+            during node failures and reduces cross-AZ network costs.
+        </div>
+
+        <h3>Active Rack (Database 7.2.0+)</h3>
+        <p>The <code>active-rack</code> feature designates one rack to hold <strong>all master partitions</strong>. 
+        This concentrates write processing on specific nodes for workload optimization.</p>
+        <pre><code># In aerospike.conf
+namespace test {{
+    strong-consistency true
+    rack-id 1
+    active-rack 1        # All masters go to rack 1 nodes
+}}</code></pre>
+        <p>After configuration, re-roster and recluster. Verify with <code>show pmap</code> — 
+        all Primary partitions should be on the active-rack nodes.</p>
+
+        <div class="warning-box">
+            <strong>Requirements:</strong>
+            <ul>
+                <li>All nodes must agree on the same active rack value</li>
+                <li>Number of racks must be ≤ replication-factor</li>
+                <li><code>active-rack = 0</code> disables the feature (rack 0 cannot be active)</li>
+            </ul>
+        </div>
+        """
+    },
+    {
+        "id": 27,
+        "title": "Partition Regimes & Hybrid Clock",
+        "short": "Regimes & Clock",
+        "icon": "",
+        "category": "concepts",
+        "content": f"""
+        <h3>How SC Orders Writes</h3>
+        <p>Aerospike uses a <strong>hybrid clock</strong> per record to ensure correct ordering, 
+        even across cluster changes and split-brain scenarios.</p>
+
+        <h3>The Record Clock</h3>
+        <p>Each record stores a 56-bit clock composed of three parts:</p>
+        <table class="comparison-table">
+            <tr><th>Component</th><th>Bits</th><th>Purpose</th></tr>
+            <tr>
+                <td>Last Update Time (LUT)</td>
+                <td>40 bits</td>
+                <td>Wall-clock timestamp of the write</td>
+            </tr>
+            <tr>
+                <td>Partition Regime</td>
+                <td>6 bits</td>
+                <td>Increments on every master handoff for this partition</td>
+            </tr>
+            <tr>
+                <td>Record Generation</td>
+                <td>10 bits</td>
+                <td>Write count for the record</td>
+            </tr>
+        </table>
+
+        <p>The combination of regime + LUT + generation provides an unambiguous ordering 
+        of every version of every record, even during cluster transitions.</p>
+
+        <h3>What is a Partition Regime?</h3>
+        <p>When a master handoff occurs (e.g., node failure, recluster), the <strong>regime</strong> for 
+        that partition is incremented. This means:</p>
+        <ul>
+            <li>Old master writes have a lower regime than new master writes</li>
+            <li>During a split-brain, only the sub-cluster with quorum can increment the regime</li>
+            <li>Any stale writes from an old master are superseded by the higher regime</li>
+        </ul>
+
+        <div class="info-box">
+            <strong>Why 6 bits?</strong> 6 bits provides ~64 regime changes. With a heartbeat interval of 
+            150ms × timeout of 10 = 1.5s per cluster change cycle, 6 bits covers about 27 seconds 
+            of clock resolution — the same window as the clock skew safety threshold.
+        </div>
+
+        <h3>How Linearizable Reads Use Regimes</h3>
+        <p>When a linearizable read is requested:</p>
+        <ol>
+            <li>The master sends "regime check" packets to all replicas</li>
+            <li>If all regimes agree, the read is current — return it</li>
+            <li>If regimes disagree, a cluster change may be in progress — the client retries</li>
+        </ol>
+
+        <h3>How Session Consistency Uses Regimes</h3>
+        <p>The client SDK stores the partition regime in its local partition table:</p>
+        <ul>
+            <li>On each read, the client records the regime it saw</li>
+            <li>If a subsequent read returns a <em>lower</em> regime, the client rejects it</li>
+            <li>This prevents reading from a stale master during master overhang</li>
+        </ul>
+
+        <div class="exercise-box">
+            <h4>Exercise: View Partition Map</h4>
+            <p>Check the partition distribution in <strong>ASADM</strong>:</p>
+            <pre><code>show pmap</code></pre>
+            <p>Each node shows Primary (master) and Secondary (replica) partition counts. 
+            During a cluster change, you may see Unavailable counts temporarily.</p>
+        </div>
+        """
+    },
+    {
+        "id": 28,
+        "title": "Full vs Subset Partitions",
+        "short": "Partition Subsets",
+        "icon": "",
+        "category": "concepts",
+        "content": f"""
+        <h3>Full and Subset Partitions</h3>
+        <p>In steady state, partitions are <strong>full</strong> — they contain all relevant data.
+        During cluster changes (rolling upgrades, node failures), some partitions become <strong>subsets</strong>.</p>
+
+        <h3>When Subsets Occur</h3>
+        <p>Consider a 5-node cluster with RF=2, where partition <em>q</em> has:</p>
+        <ul>
+            <li>Node A = roster-master (full)</li>
+            <li>Node B = roster-replica (full)</li>
+        </ul>
+
+        <p><strong>Rolling upgrade scenario:</strong></p>
+        <ol>
+            <li>Node A goes down for upgrade → Node B promotes to master, Node C becomes alternate replica (<strong>subset</strong>)</li>
+            <li>Node A returns (with stale data = <strong>subset</strong>), Node B goes down for its upgrade</li>
+            <li>Now: Node A (roster-master, <strong>subset</strong>) + Node C (alternate replica, <strong>subset</strong>)</li>
+        </ol>
+
+        <div class="info-box">
+            <strong>Key rule:</strong> In a super-majority sub-cluster (fewer than RF nodes missing), 
+            a combination of subset partitions is sufficient because every write was committed to 
+            at least RF nodes, and at most one node was down at any time. All changes are 
+            present across the remaining nodes.
+        </div>
+
+        <h3>Impact on Reads</h3>
+        <ul>
+            <li>When master has a <strong>full</strong> partition — reads are served directly</li>
+            <li>When master has a <strong>subset</strong> — each read must be resolved record-by-record 
+            against other subset nodes, adding temporary overhead</li>
+            <li><strong>Write overhead is never increased</strong> — Aerospike always writes to all copies</li>
+        </ul>
+
+        <h3>Partition Availability Rules (Refined)</h3>
+        <table class="comparison-table">
+            <tr><th>Scenario</th><th>Partition Available?</th></tr>
+            <tr>
+                <td>Both roster-master and roster-replica present, full partition exists</td>
+                <td>Yes</td>
+            </tr>
+            <tr>
+                <td>Majority sub-cluster with roster-master or roster-replica + full partition</td>
+                <td>Yes</td>
+            </tr>
+            <tr>
+                <td>Half the roster + roster-master present + full partition</td>
+                <td>Yes</td>
+            </tr>
+            <tr>
+                <td>Super-majority (fewer than RF nodes missing) + subset partitions</td>
+                <td>Yes</td>
+            </tr>
+        </table>
+
+        <h3>Evade Flag (E-Flag)</h3>
+        <p>Certain nodes are excluded from majority/super-majority counting:</p>
+        <ul>
+            <li>Nodes with empty drives or brand-new nodes (no data)</li>
+            <li>Nodes that had an unclean shutdown (unless <code>commit-to-device</code> is enabled)</li>
+        </ul>
+        <p>These nodes have the "evade flag" set until they are properly inducted with synchronized data.</p>
+        """
+    },
+    {
+        "id": 29,
+        "title": "Node ID Assignment",
+        "short": "Node IDs",
+        "icon": "",
+        "category": "setup",
+        "content": f"""
+        <h3>Why Assign Node IDs?</h3>
+        <p>By default, Aerospike generates node IDs from the server's MAC address and fabric port.
+        For SC clusters, <strong>manually assigning node IDs is recommended</strong> because:</p>
+        <ul>
+            <li>Hardware-generated IDs change if you replace hardware</li>
+            <li>Readable IDs make roster management easier</li>
+            <li>Cloud environments (AWS) benefit from stable IDs tied to EBS volumes</li>
+        </ul>
+
+        <h3>Configuring Node IDs</h3>
+        <pre><code># In aerospike.conf (service stanza)
+service {{
+    node-id a1       # 1-16 character hex value
+    cluster-name mydc
+}}</code></pre>
+
+        <div class="info-box">
+            <strong>Valid node-id values:</strong> 1 to 16 hexadecimal characters.
+            <code>01</code>, <code>B2</code>, <code>beef</code> are valid.
+            <code>fred</code> is NOT valid (not hex).
+            Duplicate node-ids are rejected — the second node cannot join.
+        </div>
+
+        <h3>Changing Node IDs on an Existing SC Cluster</h3>
+        <p>To convert from auto-generated to assigned IDs without data unavailability:</p>
+        <ol>
+            <li>Update one server's config with the new <code>node-id</code></li>
+            <li>Restart that server</li>
+            <li>Update and commit the roster with the new node ID</li>
+            <li>Repeat for the next server</li>
+        </ol>
+
+        <div class="warning-box">
+            <strong>Important:</strong>
+            <ul>
+                <li>Change one node at a time — do NOT change all at once</li>
+                <li>You don't have to wait for data migration to finish</li>
+                <li>But you <strong>must</strong> validate and apply the new roster before moving to the next node</li>
+                <li><code>node-id</code> and <code>node-id-interface</code> are mutually exclusive</li>
+            </ul>
+        </div>
+
+        <h3>Viewing Node IDs</h3>
+        <pre><code># In ASADM
+show roster
+
+# The Node ID column shows each node's ID
+# In asinfo
+asinfo -v "node"</code></pre>
+        """
     }
 ]
 
@@ -1874,35 +2440,114 @@ async def get_lesson(lesson_id: int):
 
 @app.get("/api/cluster/status")
 async def get_cluster_status():
-    """Get cluster status."""
+    """Get cluster status with diagnostics."""
     try:
         container = detect_container()
         if not container:
             return {"status": "error", "message": "No AeroLab container detected"}
-        
+
+        # Count running aerolab containers
+        container_count = 0
+        container_names = []
+        try:
+            count_result = subprocess.run(
+                ['docker', 'ps', '--filter', 'name=aerolab-', '--format', '{{.Names}}'],
+                capture_output=True, text=True, timeout=5
+            )
+            if count_result.returncode == 0:
+                container_names = [n.strip() for n in count_result.stdout.strip().split('\n') if n.strip()]
+                container_count = len(container_names)
+        except Exception:
+            pass
+
         # Get namespace info
-        result = subprocess.run(
+        ns_result = subprocess.run(
             ['docker', 'exec', container, 'asinfo', '-v', 'namespace/test'],
             capture_output=True, text=True, timeout=5
         )
-        
-        if result.returncode == 0:
-            info = result.stdout.strip()
-            params = dict(item.split('=') for item in info.split(';') if '=' in item)
-            
+
+        # Get cluster_size from statistics
+        cluster_size = 0
+        try:
+            cs_result = subprocess.run(
+                ['docker', 'exec', container, 'asinfo', '-v', 'statistics'],
+                capture_output=True, text=True, timeout=5
+            )
+            if cs_result.returncode == 0:
+                for item in cs_result.stdout.strip().split(';'):
+                    if '=' in item:
+                        k, v = item.split('=', 1)
+                        if k.strip() == 'cluster_size':
+                            cluster_size = int(v.strip())
+                            break
+        except Exception:
+            pass
+
+        # Collect warnings from recent logs
+        warnings = []
+        try:
+            log_result = subprocess.run(
+                ['docker', 'exec', container, 'tail', '-100', '/var/log/aerospike.log'],
+                capture_output=True, text=True, timeout=5
+            )
+            if log_result.returncode == 0:
+                seen = set()
+                for line in log_result.stdout.strip().split('\n'):
+                    if 'WARNING' in line or 'FAILED' in line:
+                        # Deduplicate by core message
+                        core = line.split(')', 1)[-1].strip() if ')' in line else line
+                        if core not in seen:
+                            seen.add(core)
+                            warnings.append(line.strip())
+        except Exception:
+            pass
+
+        # Build diagnostics
+        diagnostics = []
+        if cluster_size < container_count and container_count > 1:
+            diagnostics.append(
+                f"Cluster not fully formed: Aerospike sees {cluster_size} node(s) but {container_count} containers are running. "
+                "Check heartbeat/fabric network config (address must be 'any', not 'local')."
+            )
+        node_count = max(cluster_size, container_count)
+
+        if ns_result.returncode == 0:
+            info = ns_result.stdout.strip()
+            params = {}
+            for item in info.split(';'):
+                if '=' in item:
+                    k, v = item.split('=', 1)
+                    params[k] = v
+
+            ns_cluster = int(params.get('ns_cluster_size', 0))
+            dead = int(params.get('dead_partitions', 0))
+            unavail = int(params.get('unavailable_partitions', 0))
+
+            if dead > 0:
+                diagnostics.append(f"{dead} dead partitions detected — potential data loss.")
+            if unavail > 0:
+                diagnostics.append(f"{unavail} unavailable partitions — some data is unreachable.")
+            if ns_cluster == 0 and cluster_size > 0:
+                diagnostics.append("Roster not set. Run 'manage roster' in ASADM to activate SC.")
+
             return {
                 "status": "ok",
                 "container": container,
                 "strong_consistency": params.get('strong-consistency', 'false') == 'true',
                 "replication_factor": params.get('replication-factor', 'N/A'),
-                "ns_cluster_size": params.get('ns_cluster_size', 'N/A'),
-                "dead_partitions": int(params.get('dead_partitions', 0)),
-                "unavailable_partitions": int(params.get('unavailable_partitions', 0)),
+                "cluster_size": node_count,
+                "aerospike_cluster_size": cluster_size,
+                "container_count": container_count,
+                "ns_cluster_size": ns_cluster,
+                "dead_partitions": dead,
+                "unavailable_partitions": unavail,
                 "objects": int(params.get('objects', 0)),
-                "tombstones": int(params.get('tombstones', 0))
+                "tombstones": int(params.get('tombstones', 0)),
+                "diagnostics": diagnostics,
+                "warnings": warnings[-10:]  # last 10 unique warnings
             }
         else:
-            return {"status": "error", "message": result.stderr}
+            return {"status": "error", "message": ns_result.stderr, "diagnostics": diagnostics, "warnings": warnings[-10:]}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -2171,6 +2816,305 @@ async def destroy_cluster(request: Request):
         return {"success": False, "error": str(e)}
 
 
+@app.websocket("/ws/cluster/scale")
+async def scale_cluster_ws(websocket: WebSocket):
+    """Scale cluster up or down with live logging."""
+    await websocket.accept()
+    
+    async def send_log(message: str):
+        await websocket.send_json({"type": "log", "data": message})
+    
+    async def send_status(message: str):
+        await websocket.send_json({"type": "status", "data": message})
+    
+    async def send_complete(success: bool, message: str = ""):
+        await websocket.send_json({"type": "complete", "success": success, "message": message})
+    
+    async def run_cmd_logged(cmd: list) -> tuple:
+        """Run a command and stream output to WebSocket."""
+        await send_log(f"$ {' '.join(cmd)}")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+            
+            output = ""
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                decoded = line.decode().rstrip()
+                output += decoded + "\n"
+                await send_log(decoded)
+            
+            await process.wait()
+            return process.returncode, output
+        except Exception as e:
+            await send_log(f"Error: {str(e)}")
+            return 1, str(e)
+    
+    try:
+        # Get scaling parameters
+        data = await websocket.receive_json()
+        action = data.get("action")  # 'scale_up' or 'scale_down'
+        current_count = data.get("current_count", 1)
+        target_count = data.get("target_count", 1)
+        cluster_name = "mydc"  # Default AeroLab cluster name
+        
+        await send_status(f"{'Adding' if action == 'scale_up' else 'Removing'} node...")
+        await send_log(f"=== Cluster Scaling: {current_count} → {target_count} nodes ===")
+        await send_log("")
+        
+        if action == 'scale_up':
+            # Scale up: Add nodes using aerolab
+            nodes_to_add = target_count - current_count
+            await send_log(f"Adding {nodes_to_add} node(s) to cluster...")
+            await send_log("")
+            
+            # Step 1: Use aerolab cluster grow with features file
+            await send_status("Growing cluster...")
+            
+            # Find features file
+            feature_key_path = None
+            possible_paths = [
+                './aerolab-setup/features.conf',
+                '/Users/ssuman/stronconsistancy/aerolab-setup/features.conf',
+                os.path.expanduser('~/features.conf')
+            ]
+            for p in possible_paths:
+                if os.path.exists(p):
+                    feature_key_path = p
+                    break
+            
+            grow_cmd = ['aerolab', 'cluster', 'grow', '-n', cluster_name, '-c', str(nodes_to_add)]
+            if feature_key_path:
+                grow_cmd.extend(['-f', feature_key_path])
+                await send_log(f"Using features file: {feature_key_path}")
+            
+            returncode, _ = await run_cmd_logged(grow_cmd)
+            
+            if returncode != 0:
+                await send_log("")
+                await send_log("ERROR: Failed to add nodes")
+                await send_complete(False, "Failed to add nodes")
+                return
+            
+            await send_log("")
+            await send_log("Nodes added successfully")
+            
+            # Step 2: Wait for nodes to start
+            await send_status("Waiting for nodes to start...")
+            await send_log("")
+            await send_log("Waiting for new nodes to start Aerospike...")
+            await asyncio.sleep(5)
+            
+            # Step 3: Configure SC on ALL nodes (including new ones)
+            # Use timeout to prevent hanging
+            await send_status("Configuring Strong Consistency...")
+            await send_log("")
+            await send_log("=== Configuring SC on all nodes ===")
+            await send_log("This may take 30-60 seconds...")
+            
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    'aerolab', 'conf', 'sc', '-n', cluster_name,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT
+                )
+                
+                try:
+                    # Wait with timeout
+                    stdout, _ = await asyncio.wait_for(process.communicate(), timeout=90)
+                    await send_log(stdout.decode() if stdout else "SC configuration complete")
+                    returncode = process.returncode
+                except asyncio.TimeoutError:
+                    await send_log("WARNING: SC configuration timed out, continuing...")
+                    process.kill()
+                    returncode = 1
+            except Exception as e:
+                await send_log(f"SC configuration error: {e}")
+                returncode = 1
+            
+            if returncode != 0:
+                await send_log("Note: SC configuration had issues, will try manual roster update")
+            
+            # Step 4: Wait for cluster to reform
+            await send_status("Waiting for cluster to form...")
+            await send_log("")
+            await send_log("Waiting for cluster to reform with new nodes...")
+            await asyncio.sleep(5)
+            
+            # Step 5: Update SC roster
+            await send_status("Updating SC roster...")
+            await send_log("")
+            await send_log("=== Updating Strong Consistency Roster ===")
+            
+            container = detect_container()
+            if container:
+                # Stage observed nodes to pending roster
+                await send_log("Staging observed nodes to roster...")
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     'enable; manage roster stage observed ns test'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Roster staged")
+                
+                # Trigger recluster
+                await send_log("")
+                await send_log("Triggering recluster...")
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     'enable; manage recluster'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Recluster triggered")
+                
+                # Show final roster
+                await send_log("")
+                await send_log("Verifying roster...")
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 'show roster'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Roster verified")
+            
+            await send_log("")
+            await send_log(f"✓ Cluster successfully scaled to {target_count} nodes")
+            await send_complete(True)
+            
+        else:
+            # Scale down: Remove nodes with proper quiescing
+            nodes_to_remove = current_count - target_count
+            await send_log(f"Removing {nodes_to_remove} node(s) from cluster...")
+            await send_log("")
+            
+            # Get list of containers for this cluster
+            result = subprocess.run(
+                ['docker', 'ps', '--filter', f'name=aerolab-{cluster_name}', '--format', '{{.Names}}'],
+                capture_output=True, text=True
+            )
+            containers = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
+            containers.sort()  # Sort to get consistent ordering
+            
+            if len(containers) <= nodes_to_remove:
+                await send_log("ERROR: Cannot remove that many nodes")
+                await send_complete(False, "Not enough nodes to remove")
+                return
+            
+            # Containers to remove (last ones in sorted order)
+            containers_to_remove = containers[-nodes_to_remove:]
+            container = containers[0]  # First container to run commands on
+            
+            for node_container in containers_to_remove:
+                node_num = node_container.split('_')[-1]
+                node_name = f"mydc-{node_num}"
+                
+                await send_log(f"=== Removing node: {node_container} ===")
+                await send_log("")
+                
+                # Step 1: Quiesce the node
+                await send_status(f"Quiescing node {node_num}...")
+                await send_log("Step 1: Quiescing node for smooth master handoff...")
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     f'enable; manage quiesce with {node_name}'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Quiesce command sent")
+                
+                # Step 2: Trigger recluster to perform master handoff
+                await send_log("")
+                await send_log("Step 2: Triggering recluster for master handoff...")
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     'enable; manage recluster'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Recluster triggered")
+                
+                # Step 3: Wait for proxies to complete
+                await send_status(f"Waiting for handoff...")
+                await send_log("")
+                await send_log("Step 3: Waiting for master handoff and proxy completion...")
+                await asyncio.sleep(5)
+                
+                # Check quiesce status
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     'show stat namespace like quiesce'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Quiesce status checked")
+                
+                # Step 4: Stop the node
+                await send_status(f"Stopping node {node_num}...")
+                await send_log("")
+                await send_log(f"Step 4: Stopping node {node_container}...")
+                subprocess.run(['docker', 'stop', node_container], capture_output=True, timeout=60)
+                await send_log(f"Node {node_container} stopped")
+                
+                # Step 5: Remove the container
+                await send_log(f"Removing container {node_container}...")
+                subprocess.run(['docker', 'rm', node_container], capture_output=True, timeout=30)
+                await send_log(f"Container {node_container} removed")
+                await send_log("")
+            
+            # Step 6: Wait for cluster to stabilize
+            await send_status("Stabilizing cluster...")
+            await send_log("Waiting for cluster to stabilize...")
+            await asyncio.sleep(3)
+            
+            # Step 7: Update roster
+            await send_status("Updating roster...")
+            await send_log("")
+            await send_log("=== Updating Strong Consistency Roster ===")
+            container = detect_container()
+            if container:
+                await send_log("Staging observed nodes to roster...")
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     'enable; manage roster stage observed ns test'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Roster staged")
+                
+                await send_log("")
+                await send_log("Triggering recluster...")
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     'enable; manage recluster'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Recluster complete")
+                
+                # Wait for migrations
+                await send_log("")
+                await send_log("Waiting for migrations to complete...")
+                await asyncio.sleep(3)
+                
+                # Check final status
+                result = subprocess.run(
+                    ['docker', 'exec', container, 'asadm', '-e', 
+                     'show stat service like migrate_partitions_remaining'],
+                    capture_output=True, text=True, timeout=30
+                )
+                await send_log(result.stdout if result.stdout else "Migrations checked")
+            
+            await send_log("")
+            await send_log(f"✓ Cluster successfully scaled to {target_count} nodes")
+            await send_complete(True)
+                
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        import traceback
+        await send_log(f"Error: {str(e)}")
+        await send_complete(False, str(e))
+
+
 @app.post("/api/setup/upload-feature-key")
 async def upload_feature_key(request: Request):
     """Save uploaded feature key content."""
@@ -2403,6 +3347,137 @@ async def terminal_websocket(websocket: WebSocket, terminal_type: str):
             process.close()
         except Exception:
             pass
+
+
+# =============================================================================
+# AI CHAT (Gemini)
+# =============================================================================
+
+import pathlib
+import httpx
+
+GEMINI_API_KEY_FILE = os.path.join(os.path.dirname(BASE_DIR), ".gemini_api_key")
+
+DOCS_CONTENT: str | None = None
+
+def _load_docs() -> str:
+    global DOCS_CONTENT
+    if DOCS_CONTENT is not None:
+        return DOCS_CONTENT
+
+    project_root = os.path.dirname(BASE_DIR)
+    parts = []
+    for name in sorted(pathlib.Path(project_root).glob("strong-consistancydocs*.md")):
+        parts.append(name.read_text(encoding="utf-8", errors="replace"))
+
+    # Include cluster config files so the AI knows the current setup
+    config_files = [
+        os.path.join(project_root, "aerolab-setup", "aerospike.conf"),
+        os.path.join(project_root, "features.conf"),
+    ]
+    for cfg_path in config_files:
+        if os.path.isfile(cfg_path):
+            try:
+                content = open(cfg_path, encoding="utf-8", errors="replace").read().strip()
+                if content:
+                    label = os.path.basename(cfg_path)
+                    parts.append(f"=== Current Cluster Config: {label} ===\n{content}")
+            except Exception:
+                pass
+
+    DOCS_CONTENT = "\n\n---\n\n".join(parts) if parts else ""
+    return DOCS_CONTENT
+
+
+def _read_api_key() -> str | None:
+    try:
+        if os.path.exists(GEMINI_API_KEY_FILE):
+            return open(GEMINI_API_KEY_FILE).read().strip() or None
+    except Exception:
+        pass
+    return os.environ.get("GEMINI_API_KEY")
+
+
+def _save_api_key(key: str):
+    with open(GEMINI_API_KEY_FILE, "w") as f:
+        f.write(key.strip())
+
+
+@app.get("/api/admin/apikey")
+async def get_api_key_status():
+    key = _read_api_key()
+    return {"configured": bool(key), "masked": f"{key[:4]}...{key[-4:]}" if key and len(key) > 8 else None}
+
+
+@app.post("/api/admin/apikey")
+async def set_api_key(request: Request):
+    body = await request.json()
+    key = body.get("api_key", "").strip()
+    if not key:
+        return {"success": False, "error": "API key is required"}
+    _save_api_key(key)
+    return {"success": True}
+
+
+@app.post("/api/chat")
+async def chat(request: Request):
+    body = await request.json()
+    user_message = body.get("message", "").strip()
+    lesson_context = body.get("lesson_context", "")
+
+    if not user_message:
+        return {"error": "Message is required"}
+
+    api_key = _read_api_key()
+    if not api_key:
+        return {"error": "Gemini API key not configured. Click the gear icon in the chat to set it up."}
+
+    docs = _load_docs()
+
+    system_prompt = (
+        "You are an expert assistant for the Aerospike Strong Consistency (SC) tutorial. "
+        "Answer questions about Aerospike Strong Consistency using the reference documentation provided below. "
+        "The documentation also includes the current cluster configuration files (aerospike.conf and features.conf) "
+        "so you know exactly how the user's cluster is set up. Use this config context when relevant. "
+        "Be concise, accurate, and practical. Use code examples when helpful. "
+        "If the user's question relates to the current lesson, tailor your answer to that context.\n\n"
+    )
+
+    if lesson_context:
+        system_prompt += f"The user is currently viewing: {lesson_context}\n\n"
+
+    system_prompt += f"=== Reference Documentation ===\n{docs}\n"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    payload = {
+        "contents": [
+            {"role": "user", "parts": [{"text": system_prompt + "\n\nUser question: " + user_message}]}
+        ],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 2048
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        answer = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "Sorry, I could not generate a response.")
+        )
+        return {"answer": answer}
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400:
+            return {"error": "Invalid API key or request. Please check your Gemini API key."}
+        return {"error": f"Gemini API error: {e.response.status_code}"}
+    except Exception as e:
+        return {"error": f"Failed to reach Gemini: {str(e)}"}
 
 
 if __name__ == "__main__":

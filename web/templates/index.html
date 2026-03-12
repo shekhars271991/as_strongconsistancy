@@ -6,10 +6,26 @@
     <title>Aerospike Strong Consistency Tutorial</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        (function(){
+            var t=localStorage.getItem('sc-theme');
+            if(t==='dark'){
+                // User explicitly chose dark
+                document.addEventListener('DOMContentLoaded',function(){
+                    var d=document.getElementById('hljs-dark'),l=document.getElementById('hljs-light');
+                    if(d)d.disabled=false; if(l)l.disabled=true;
+                });
+            } else {
+                // Light is the default
+                document.documentElement.classList.add('light');
+            }
+        })();
+    </script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@0.294.0/font/lucide.min.css">
-    <!-- Syntax Highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <!-- Syntax Highlighting (light default; JS swaps on theme toggle) -->
+    <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" disabled>
+    <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
@@ -17,13 +33,16 @@
 <body>
     <div class="app-container">
         <!-- Sidebar Navigation -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <div class="logo">
                 <svg class="logo-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"/></svg>
                 <span class="logo-text">Aerospike SC</span>
             </div>
-            <span class="version">Tutorial v1.0</span>
+            <button class="sidebar-collapse-btn" id="sidebar-collapse-btn" onclick="toggleSidebar()" title="Collapse sidebar">
+                <svg class="icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+                <svg class="icon-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+            </button>
         </div>
             
             <div class="cluster-status" id="cluster-status">
@@ -108,6 +127,10 @@
                     <button class="btn btn-primary" id="next-btn">
                         Next →
                     </button>
+                    <button class="btn-icon theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">
+                        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    </button>
                 </div>
             </header>
             
@@ -121,7 +144,7 @@
                         
                         <div class="feature-grid">
                             <div class="feature-card">
-                                <h3>25 Lessons</h3>
+                                <h3>30 Lessons</h3>
                                 <p>From basics to advanced cluster operations</p>
                             </div>
                             <div class="feature-card">
@@ -183,6 +206,67 @@
                 </section>
             </div>
         </main>
+        
+        <!-- Full-height right-side AI chat panel (inside app-container for flex layout) -->
+        <aside class="chat-sidebar" id="chat-sidebar">
+            <div class="chat-header">
+                <div class="chat-header-left">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <span>SC Assistant</span>
+                    <span class="chat-badge" id="chat-badge" style="display:none;">AI</span>
+                </div>
+                <div class="chat-header-actions">
+                    <button class="chat-icon-btn" onclick="openChatSettings()" title="Settings">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                    <button class="chat-icon-btn" onclick="clearChat()" title="Clear chat">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                    </button>
+                    <button class="chat-icon-btn" onclick="toggleChat()" title="Close panel">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Settings view -->
+            <div class="chat-settings" id="chat-settings" style="display:none;">
+                <h4>Gemini API Key</h4>
+                <p>Enter your Google Gemini API key to enable the AI assistant.</p>
+                <div class="chat-settings-form">
+                    <input type="password" id="api-key-input" placeholder="AIza..." autocomplete="off">
+                    <button class="btn btn-primary btn-sm" onclick="saveApiKey()">Save</button>
+                </div>
+                <p class="chat-settings-hint" id="api-key-status"></p>
+                <p class="chat-settings-hint">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a></p>
+                <button class="btn btn-outline btn-sm" onclick="closeChatSettings()" style="margin-top:12px;">Back to chat</button>
+            </div>
+
+            <!-- Messages area -->
+            <div class="chat-messages" id="chat-messages">
+                <div class="chat-msg assistant">
+                    <div class="chat-msg-content">
+                        Hi! I'm your SC assistant. Ask me anything about Aerospike Strong Consistency — I have access to the full documentation.
+                        <br><br>I also watch your terminal — when I see an error or interesting output, I'll jump in with help automatically.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input area -->
+            <div class="chat-input-area">
+                <div class="chat-input-wrap">
+                    <textarea id="chat-input" placeholder="Ask about Strong Consistency..." rows="1" onkeydown="handleChatKey(event)"></textarea>
+                    <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMessage()" title="Send">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    </button>
+                </div>
+                <div class="chat-context-label" id="chat-context-label">Context: Welcome page</div>
+            </div>
+        </aside>
+    </div>
+    
+    <!-- Chat toggle FAB (fixed, outside container) -->
+    <div class="chat-fab" id="chat-fab" onclick="toggleChat()" title="Ask AI about SC">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
     </div>
     
     <!-- Setup Wizard Modal -->
@@ -198,9 +282,90 @@
         </div>
     </div>
     
+    <!-- Full Page Cluster Management View -->
+    <div class="cluster-management-view" id="cluster-management-view" style="display: none;">
+        <div class="cm-sidebar">
+            <div class="cm-header">
+                <button class="btn btn-back" onclick="closeClusterManagement()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                    Back to Tutorial
+                </button>
+                <h2>Cluster Management</h2>
+            </div>
+            
+            <div class="cm-cluster-info" id="cm-cluster-info">
+                <div class="cm-info-card">
+                    <div class="cm-info-label">Current Nodes</div>
+                    <div class="cm-info-value" id="cm-current-nodes">-</div>
+                </div>
+                <div class="cm-info-card">
+                    <div class="cm-info-label">SC Mode</div>
+                    <div class="cm-info-value" id="cm-sc-mode">-</div>
+                </div>
+                <div class="cm-info-card">
+                    <div class="cm-info-label">RF</div>
+                    <div class="cm-info-value" id="cm-rf">-</div>
+                </div>
+                <div class="cm-info-card">
+                    <div class="cm-info-label">Health</div>
+                    <div class="cm-info-value" id="cm-health">-</div>
+                </div>
+            </div>
+            
+            <div class="cm-scale-section">
+                <h3>Scale Cluster</h3>
+                <div class="cm-scale-control">
+                    <label>Target Nodes</label>
+                    <select id="cm-target-nodes" class="cm-select">
+                        <option value="1">1 node</option>
+                        <option value="2">2 nodes</option>
+                        <option value="3" selected>3 nodes</option>
+                        <option value="4">4 nodes</option>
+                        <option value="5">5 nodes</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary btn-full" id="cm-scale-btn" onclick="startScaling()">
+                    Scale Cluster
+                </button>
+            </div>
+            
+            <div class="cm-status-section" id="cm-status-section" style="display: none;">
+                <h3>Operation Status</h3>
+                <div class="cm-operation-info">
+                    <div class="cm-op-nodes">
+                        <span id="cm-from-nodes">2</span>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        <span id="cm-to-nodes">3</span>
+                        <span class="cm-op-label">nodes</span>
+                    </div>
+                    <div class="cm-op-status" id="cm-op-status">Initializing...</div>
+                </div>
+            </div>
+            
+            <div class="cm-actions" id="cm-actions" style="display: none;">
+                <button class="btn btn-outline btn-full" onclick="resetClusterManagement()">
+                    New Operation
+                </button>
+            </div>
+        </div>
+        
+        <div class="cm-main">
+            <div class="cm-logs-header">
+                <div class="cm-logs-title">
+                    <span class="cm-logs-dot"></span>
+                    Live Operation Logs
+                </div>
+                <button class="btn btn-sm" onclick="clearLogs()">Clear</button>
+            </div>
+            <pre class="cm-logs" id="cm-logs">Cluster management ready. Select target nodes and click "Scale Cluster" to begin.
+
+Logs will appear here during operations...</pre>
+        </div>
+    </div>
+
     <!-- Store lessons data -->
     <script>
-        const LESSONS = {{ lessons | tojson | safe }};
+        var LESSONS = {{ lessons | tojson | safe }};
     </script>
     
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>

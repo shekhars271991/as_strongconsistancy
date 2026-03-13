@@ -181,9 +181,12 @@
                         </button>
                         <button class="terminal-tab" data-terminal="bash">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                            Shell
+                            Terminal
                         </button>
                         <div class="terminal-actions">
+                            <button class="btn-icon" id="copy-terminal" title="Copy terminal content">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            </button>
                             <button class="btn-icon" id="clear-terminal" title="Clear">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                             </button>
@@ -207,63 +210,64 @@
             </div>
         </main>
         
-        <!-- Full-height right-side AI chat panel (inside app-container for flex layout) -->
-        <aside class="chat-sidebar" id="chat-sidebar">
-            <div class="chat-header">
-                <div class="chat-header-left">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    <span>SC Assistant</span>
-                    <span class="chat-badge" id="chat-badge" style="display:none;">AI</span>
-                </div>
-                <div class="chat-header-actions">
-                    <button class="chat-icon-btn" onclick="openChatSettings()" title="Settings">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-                    </button>
-                    <button class="chat-icon-btn" onclick="clearChat()" title="Clear chat">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-                    </button>
-                    <button class="chat-icon-btn" onclick="toggleChat()" title="Close panel">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Settings view -->
-            <div class="chat-settings" id="chat-settings" style="display:none;">
-                <h4>Gemini API Key</h4>
-                <p>Enter your Google Gemini API key to enable the AI assistant.</p>
-                <div class="chat-settings-form">
-                    <input type="password" id="api-key-input" placeholder="AIza..." autocomplete="off">
-                    <button class="btn btn-primary btn-sm" onclick="saveApiKey()">Save</button>
-                </div>
-                <p class="chat-settings-hint" id="api-key-status"></p>
-                <p class="chat-settings-hint">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a></p>
-                <button class="btn btn-outline btn-sm" onclick="closeChatSettings()" style="margin-top:12px;">Back to chat</button>
-            </div>
-
-            <!-- Messages area -->
-            <div class="chat-messages" id="chat-messages">
-                <div class="chat-msg assistant">
-                    <div class="chat-msg-content">
-                        Hi! I'm your SC assistant. Ask me anything about Aerospike Strong Consistency — I have access to the full documentation.
-                        <br><br>I also watch your terminal — when I see an error or interesting output, I'll jump in with help automatically.
-                    </div>
-                </div>
-            </div>
-
-            <!-- Input area -->
-            <div class="chat-input-area">
-                <div class="chat-input-wrap">
-                    <textarea id="chat-input" placeholder="Ask about Strong Consistency..." rows="1" onkeydown="handleChatKey(event)"></textarea>
-                    <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMessage()" title="Send">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                    </button>
-                </div>
-                <div class="chat-context-label" id="chat-context-label">Context: Welcome page</div>
-            </div>
-        </aside>
     </div>
-    
+
+    <!-- AI Chat Sidebar (fixed, available on all views) -->
+    <aside class="chat-sidebar" id="chat-sidebar">
+        <div class="chat-header">
+            <div class="chat-header-left">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>SC Assistant</span>
+                <span class="chat-badge" id="chat-badge" style="display:none;">AI</span>
+            </div>
+            <div class="chat-header-actions">
+                <button class="chat-icon-btn" id="auto-ai-toggle" onclick="toggleAutoAI()" title="Toggle auto-analysis from terminal activity">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </button>
+                <button class="chat-icon-btn" onclick="openChatSettings()" title="Settings">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+                <button class="chat-icon-btn" onclick="clearChat()" title="Clear chat">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                </button>
+                <button class="chat-icon-btn" onclick="toggleChat()" title="Close panel">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="chat-settings" id="chat-settings" style="display:none;">
+            <h4>Gemini API Key</h4>
+            <p>Enter your Google Gemini API key to enable the AI assistant.</p>
+            <div class="chat-settings-form">
+                <input type="password" id="api-key-input" placeholder="AIza..." autocomplete="off">
+                <button class="btn btn-primary btn-sm" onclick="saveApiKey()">Save</button>
+            </div>
+            <p class="chat-settings-hint" id="api-key-status"></p>
+            <p class="chat-settings-hint">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a></p>
+            <button class="btn btn-outline btn-sm" onclick="closeChatSettings()" style="margin-top:12px;">Back to chat</button>
+        </div>
+
+        <div class="chat-messages" id="chat-messages">
+            <div class="chat-msg assistant">
+                <div class="chat-msg-content">
+                    Hi! I'm your SC assistant. Ask me anything about Aerospike Strong Consistency — I have access to the full documentation.
+                    <br><br>I also watch your terminal — when I see an error or interesting output, I'll jump in with help automatically.
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-area">
+            <div class="chat-input-wrap">
+                <textarea id="chat-input" placeholder="Ask about Strong Consistency..." rows="1" onkeydown="handleChatKey(event)"></textarea>
+                <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMessage()" title="Send">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </button>
+            </div>
+            <div class="chat-context-label" id="chat-context-label">Context: Welcome page</div>
+        </div>
+    </aside>
+
     <!-- Chat toggle FAB (fixed, outside container) -->
     <div class="chat-fab" id="chat-fab" onclick="toggleChat()" title="Ask AI about SC">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -282,20 +286,39 @@
         </div>
     </div>
     
+    <!-- CM Loading Overlay -->
+    <div id="cm-loading-overlay" class="cm-loading-overlay" style="display: none;">
+        <div class="cm-loading-spinner"></div>
+        <span>Loading cluster info&hellip;</span>
+    </div>
+
     <!-- Full Page Cluster Management View -->
     <div class="cluster-management-view" id="cluster-management-view" style="display: none;">
-        <div class="cm-sidebar">
-            <div class="cm-header">
+        <!-- CM Top Bar -->
+        <div class="cm-topbar">
+            <div class="cm-topbar-left">
                 <button class="btn btn-back" onclick="closeClusterManagement()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
                     Back to Tutorial
                 </button>
                 <h2>Cluster Management</h2>
             </div>
-            
-            <div class="cm-cluster-info" id="cm-cluster-info">
+            <div class="cm-topbar-right">
+                <button class="btn-icon theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                    <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                </button>
+                <button class="btn-icon" onclick="toggleChat()" title="AI Assistant">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Inline info strip + scale controls -->
+        <div class="cm-info-strip">
+            <div class="cm-info-cards" id="cm-cluster-info">
                 <div class="cm-info-card">
-                    <div class="cm-info-label">Current Nodes</div>
+                    <div class="cm-info-label">Nodes</div>
                     <div class="cm-info-value" id="cm-current-nodes">-</div>
                 </div>
                 <div class="cm-info-card">
@@ -311,11 +334,8 @@
                     <div class="cm-info-value" id="cm-health">-</div>
                 </div>
             </div>
-            
-            <div class="cm-scale-section">
-                <h3>Scale Cluster</h3>
-                <div class="cm-scale-control">
-                    <label>Target Nodes</label>
+            <div class="cm-strip-right">
+                <div class="cm-scale-inline">
                     <select id="cm-target-nodes" class="cm-select">
                         <option value="1">1 node</option>
                         <option value="2">2 nodes</option>
@@ -323,43 +343,116 @@
                         <option value="4">4 nodes</option>
                         <option value="5">5 nodes</option>
                     </select>
+                    <button class="btn btn-primary btn-sm" id="cm-scale-btn" onclick="startScaling()">Scale</button>
                 </div>
-                <button class="btn btn-primary btn-full" id="cm-scale-btn" onclick="startScaling()">
-                    Scale Cluster
+                <div class="cm-op-inline" id="cm-status-section" style="display: none;">
+                    <span id="cm-from-nodes">2</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    <span id="cm-to-nodes">3</span>
+                    <span class="cm-op-status" id="cm-op-status">...</span>
+                </div>
+                <button class="btn btn-sm btn-outline" onclick="refreshNodes(); refreshClusterHealth()">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+                    Refresh
                 </button>
-            </div>
-            
-            <div class="cm-status-section" id="cm-status-section" style="display: none;">
-                <h3>Operation Status</h3>
-                <div class="cm-operation-info">
-                    <div class="cm-op-nodes">
-                        <span id="cm-from-nodes">2</span>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                        <span id="cm-to-nodes">3</span>
-                        <span class="cm-op-label">nodes</span>
-                    </div>
-                    <div class="cm-op-status" id="cm-op-status">Initializing...</div>
-                </div>
-            </div>
-            
-            <div class="cm-actions" id="cm-actions" style="display: none;">
-                <button class="btn btn-outline btn-full" onclick="resetClusterManagement()">
-                    New Operation
+                <button class="cm-oplogs-toggle" onclick="toggleOpLogs()">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    Logs
+                    <span class="cm-logs-dot"></span>
                 </button>
             </div>
         </div>
-        
-        <div class="cm-main">
-            <div class="cm-logs-header">
-                <div class="cm-logs-title">
-                    <span class="cm-logs-dot"></span>
-                    Live Operation Logs
-                </div>
-                <button class="btn btn-sm" onclick="clearLogs()">Clear</button>
-            </div>
-            <pre class="cm-logs" id="cm-logs">Cluster management ready. Select target nodes and click "Scale Cluster" to begin.
 
-Logs will appear here during operations...</pre>
+        <!-- AI Health Insight banner -->
+        <div class="cm-health-banner" id="cm-health-banner" style="display:none;">
+            <div class="cm-health-banner-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
+            <div class="cm-health-banner-content" id="cm-health-banner-content">Analyzing...</div>
+            <button class="btn-icon" onclick="document.getElementById('cm-health-banner').style.display='none'" title="Dismiss">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+
+        <!-- Operation logs (collapsible banner) -->
+        <pre class="cm-logs cm-oplogs-banner" id="cm-logs" style="display:none;">Ready for operations...</pre>
+
+        <!-- Main content area -->
+        <div class="cm-main">
+            <!-- Compact nodes grid -->
+            <div class="cm-nodes-section">
+                <div class="cm-nodes-grid" id="cm-nodes-grid">
+                    <div class="cm-nodes-loading">Loading nodes...</div>
+                </div>
+            </div>
+
+            <!-- Tabbed panel: Terminal / Config / Logs -->
+            <div class="cm-tabbed-panel">
+                <div class="cm-tab-bar">
+                    <button class="cm-tab active" data-tab="terminal" onclick="switchCmTab('terminal')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                        Terminal
+                    </button>
+                    <button class="cm-tab" data-tab="config" onclick="switchCmTab('config')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                        Config
+                    </button>
+                    <button class="cm-tab" data-tab="logs" onclick="switchCmTab('logs')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        Logs
+                    </button>
+                    <div class="cm-tab-spacer"></div>
+                    <span class="cm-tab-node-label" id="cm-tab-node-label">No node selected</span>
+                    <!-- Tab-specific actions injected by JS -->
+                    <div class="cm-tab-actions" id="cm-tab-actions"></div>
+                </div>
+
+                <!-- Terminal tab -->
+                <div class="cm-tab-content active" id="cm-tab-terminal">
+                    <div class="cm-terminal-container" id="cm-terminal-container">
+                        <div id="cm-terminal"></div>
+                    </div>
+                    <div class="cm-terminal-status" id="cm-terminal-status">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Select a node above</span>
+                        <button class="btn-icon" id="cm-copy-terminal" title="Copy terminal content" style="margin-left:auto;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        </button>
+                        <button class="btn-icon" id="cm-clear-terminal" title="Clear">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Config tab -->
+                <div class="cm-tab-content" id="cm-tab-config">
+                    <div class="cm-config-toolbar" id="cm-config-toolbar">
+                        <span id="cm-config-title" class="cm-config-title">Select a node to edit config</span>
+                        <div class="cm-config-actions">
+                            <button class="btn btn-sm btn-primary" id="cm-config-save" onclick="saveNodeConfig()">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                                Save &amp; Restart
+                            </button>
+                        </div>
+                    </div>
+                    <textarea class="cm-config-textarea" id="cm-config-textarea" spellcheck="false" placeholder="Select a node and click Config to load its aerospike.conf"></textarea>
+                    <div class="cm-config-status" id="cm-config-status"></div>
+                </div>
+
+                <!-- Logs tab -->
+                <div class="cm-tab-content" id="cm-tab-logs">
+                    <div class="cm-logs-toolbar" id="cm-logs-toolbar">
+                        <span id="cm-detail-title" class="cm-config-title">Select a node to view logs</span>
+                        <div class="cm-config-actions">
+                            <button class="btn btn-sm btn-outline" onclick="refreshNodeLogs()">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+                                Refresh
+                            </button>
+                        </div>
+                    </div>
+                    <pre class="cm-node-logs" id="cm-node-logs">Select a node and click Logs to view Aerospike logs.</pre>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -370,6 +463,7 @@ Logs will appear here during operations...</pre>
     
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

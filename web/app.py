@@ -2442,10 +2442,6 @@ async def get_lesson(lesson_id: int):
 async def get_cluster_status():
     """Get cluster status with diagnostics."""
     try:
-        container = detect_container()
-        if not container:
-            return {"status": "error", "message": "No AeroLab container detected"}
-
         # Count running aerolab containers
         container_count = 0
         container_names = []
@@ -2459,6 +2455,28 @@ async def get_cluster_status():
                 container_count = len(container_names)
         except Exception:
             pass
+
+        if not container_names:
+            return {"status": "error", "message": "No AeroLab container detected"}
+
+        # Probe ALL containers to find which are alive vs down
+        live_container = None
+        down_containers = []
+        for cname in container_names:
+            try:
+                probe = subprocess.run(
+                    ['docker', 'exec', cname, 'asinfo', '-v', 'status'],
+                    capture_output=True, text=True, timeout=3
+                )
+                if probe.returncode == 0 and 'ok' in probe.stdout.lower():
+                    if not live_container:
+                        live_container = cname
+                else:
+                    down_containers.append(cname)
+            except Exception:
+                down_containers.append(cname)
+
+        container = live_container or container_names[0]
 
         # Get namespace info
         ns_result = subprocess.run(
@@ -2483,27 +2501,32 @@ async def get_cluster_status():
         except Exception:
             pass
 
-        # Collect warnings from recent logs
+        # Collect warnings from recent logs across all containers
         warnings = []
-        try:
-            log_result = subprocess.run(
-                ['docker', 'exec', container, 'tail', '-100', '/var/log/aerospike.log'],
-                capture_output=True, text=True, timeout=5
-            )
-            if log_result.returncode == 0:
-                seen = set()
-                for line in log_result.stdout.strip().split('\n'):
-                    if 'WARNING' in line or 'FAILED' in line:
-                        # Deduplicate by core message
-                        core = line.split(')', 1)[-1].strip() if ')' in line else line
-                        if core not in seen:
-                            seen.add(core)
-                            warnings.append(line.strip())
-        except Exception:
-            pass
+        seen = set()
+        for cname in container_names:
+            try:
+                log_result = subprocess.run(
+                    ['docker', 'exec', cname, 'tail', '-50', '/var/log/aerospike.log'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if log_result.returncode == 0:
+                    for line in log_result.stdout.strip().split('\n'):
+                        if 'WARNING' in line or 'FAILED' in line or 'CRITICAL' in line or 'clean shutdown' in line:
+                            core = line.split(')', 1)[-1].strip() if ')' in line else line
+                            if core not in seen:
+                                seen.add(core)
+                                warnings.append(f"[{cname}] {line.strip()}")
+            except Exception:
+                pass
 
         # Build diagnostics
         diagnostics = []
+        if down_containers:
+            diagnostics.append(
+                f"Aerospike process is DOWN on: {', '.join(down_containers)}. "
+                "The container is running but asd has crashed or exited. Check logs for errors."
+            )
         if cluster_size < container_count and container_count > 1:
             diagnostics.append(
                 f"Cluster not fully formed: Aerospike sees {cluster_size} node(s) but {container_count} containers are running. "
@@ -2544,12 +2567,398 @@ async def get_cluster_status():
                 "objects": int(params.get('objects', 0)),
                 "tombstones": int(params.get('tombstones', 0)),
                 "diagnostics": diagnostics,
-                "warnings": warnings[-10:]  # last 10 unique warnings
+                "warnings": warnings[-10:]
             }
         else:
             return {"status": "error", "message": ns_result.stderr, "diagnostics": diagnostics, "warnings": warnings[-10:]}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/cluster/nodes")
+async def get_cluster_nodes():
+    """Get detailed info about each cluster node."""
+    try:
+        result = subprocess.run(
+            ['docker', 'ps', '--filter', 'name=aerolab-', '--format', '{{.Names}}\t{{.Status}}'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return {"nodes": []}
+
+        nodes = []
+        for line in result.stdout.strip().split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split('\t')
+            container_name = parts[0].strip()
+            container_status = parts[1].strip() if len(parts) > 1 else 'unknown'
+
+            node_num = 0
+            if '_' in container_name:
+                try:
+                    node_num = int(container_name.rsplit('_', 1)[1])
+                except Exception:
+                    pass
+
+            container_up = 'Up' in container_status
+
+            node = {
+                'container': container_name,
+                'node_num': node_num,
+                'status': 'offline',
+                'uptime': container_status,
+                'ip': '',
+                'cluster_size': 0,
+                'is_principal': False,
+                'node_id': ''
+            }
+
+            try:
+                ip_result = subprocess.run(
+                    ['docker', 'inspect', '-f',
+                     '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
+                     container_name],
+                    capture_output=True, text=True, timeout=3
+                )
+                if ip_result.returncode == 0:
+                    node['ip'] = ip_result.stdout.strip()
+            except Exception:
+                pass
+
+            if container_up:
+                asd_alive = False
+                try:
+                    stats = subprocess.run(
+                        ['docker', 'exec', container_name, 'asinfo', '-v', 'statistics'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if stats.returncode == 0 and stats.stdout.strip():
+                        asd_alive = True
+                        params = {}
+                        for item in stats.stdout.strip().split(';'):
+                            if '=' in item:
+                                k, v = item.split('=', 1)
+                                params[k.strip()] = v.strip()
+                        node['cluster_size'] = int(params.get('cluster_size', 0))
+                        node['node_id'] = params.get('node_name', '')
+                        principal = params.get('cluster_principal', '')
+                        node['is_principal'] = (
+                            node['node_id'] == principal
+                        ) if node['node_id'] and principal else False
+                except Exception:
+                    pass
+
+                node['status'] = 'online' if asd_alive else 'offline'
+
+            nodes.append(node)
+
+        nodes.sort(key=lambda n: n['node_num'])
+        return {"nodes": nodes}
+    except Exception as e:
+        return {"nodes": [], "error": str(e)}
+
+
+@app.get("/api/cluster/nodes/{container}/logs")
+async def get_node_logs(container: str):
+    """Get recent Aerospike logs from a specific node."""
+    try:
+        result = subprocess.run(
+            ['docker', 'exec', container, 'tail', '-200', '/var/log/aerospike.log'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return {"logs": result.stdout}
+        return {"logs": "", "error": result.stderr}
+    except Exception as e:
+        return {"logs": "", "error": str(e)}
+
+
+@app.get("/api/cluster/nodes/{container}/config")
+async def get_node_config(container: str):
+    """Read the aerospike.conf from a specific node."""
+    try:
+        result = subprocess.run(
+            ['docker', 'exec', container, 'cat', '/etc/aerospike/aerospike.conf'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return {"config": result.stdout}
+        return {"config": "", "error": result.stderr}
+    except Exception as e:
+        return {"config": "", "error": str(e)}
+
+
+@app.post("/api/cluster/nodes/{container}/config")
+async def save_node_config(container: str, request: Request):
+    """Write aerospike.conf to a specific node."""
+    try:
+        body = await request.json()
+        content = body.get("config", "")
+        if not content:
+            return {"success": False, "error": "Config content is required"}
+
+        proc = subprocess.run(
+            ['docker', 'exec', '-i', container, 'tee', '/etc/aerospike/aerospike.conf'],
+            input=content, capture_output=True, text=True, timeout=10
+        )
+        if proc.returncode == 0:
+            return {"success": True}
+        return {"success": False, "error": proc.stderr}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/cluster/nodes/{container}/restart")
+async def restart_node(container: str):
+    """Restart Aerospike service on a specific node."""
+    try:
+        stop = subprocess.run(
+            ['docker', 'exec', container, 'service', 'aerospike', 'restart'],
+            capture_output=True, text=True, timeout=30
+        )
+        if stop.returncode == 0:
+            return {"success": True, "message": "Aerospike restarted"}
+        # Fallback: kill and start
+        subprocess.run(
+            ['docker', 'exec', container, 'bash', '-c',
+             'pkill -f asd; sleep 1; /usr/bin/asd --config-file /etc/aerospike/aerospike.conf'],
+            capture_output=True, text=True, timeout=30
+        )
+        return {"success": True, "message": "Aerospike restarted (via kill+start)"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/cluster/health-insight")
+async def health_insight(request: Request):
+    """AI-powered health analysis using logs + config from all nodes + config reference."""
+    api_key = _read_api_key()
+    if not api_key:
+        return {"error": "No Gemini API key configured"}
+
+    body = await request.json()
+    diagnostics = body.get("diagnostics", [])
+    warnings_list = body.get("warnings", [])
+
+    # Gather configs and logs from all running containers
+    container_names = []
+    try:
+        count_result = subprocess.run(
+            ['docker', 'ps', '--filter', 'name=aerolab-', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=5
+        )
+        if count_result.returncode == 0:
+            container_names = [n.strip() for n in count_result.stdout.strip().split('\n') if n.strip()]
+    except Exception:
+        pass
+
+    # Gather configs and logs per node
+    configs = {}
+    node_context = ""
+    for cname in sorted(container_names):
+        node_context += f"\n--- {cname} ---\n"
+
+        # Config
+        cfg_text = ""
+        try:
+            cfg = subprocess.run(
+                ['docker', 'exec', cname, 'cat', '/etc/aerospike/aerospike.conf'],
+                capture_output=True, text=True, timeout=5
+            )
+            if cfg.returncode == 0:
+                cfg_text = cfg.stdout.strip()
+            else:
+                cfg_text = "FAILED TO READ"
+        except Exception as e:
+            cfg_text = f"Error: {e}"
+        configs[cname] = cfg_text
+        node_context += f"[aerospike.conf]\n{cfg_text}\n\n"
+
+        # Recent logs (last 80 lines, focusing on errors/warnings/shutdown)
+        try:
+            logs = subprocess.run(
+                ['docker', 'exec', cname, 'tail', '-80', '/var/log/aerospike.log'],
+                capture_output=True, text=True, timeout=5
+            )
+            if logs.returncode == 0:
+                important = []
+                for line in logs.stdout.strip().split('\n'):
+                    ll = line.upper()
+                    if any(kw in ll for kw in ['WARNING', 'CRITICAL', 'ERROR', 'FAILED',
+                                                'SHUTDOWN', 'SIGNAL', 'CRASH', 'SEGV',
+                                                'PARTITION', 'ROSTER', 'RECLUSTER']):
+                        important.append(line.strip())
+                if important:
+                    node_context += f"[recent important logs — {len(important)} lines]\n" + '\n'.join(important[-30:]) + "\n"
+                else:
+                    node_context += "[recent logs] No warnings or errors in last 80 lines.\n"
+            else:
+                node_context += f"[logs] Could not read — asd may be down. stderr: {logs.stderr.strip()}\n"
+        except Exception as e:
+            node_context += f"[logs] Error: {e}\n"
+
+    # Compute config diff between nodes
+    config_diff = ""
+    cfg_list = [(name, cfg) for name, cfg in configs.items() if cfg and "FAILED" not in cfg and "Error" not in cfg]
+    if len(cfg_list) >= 2:
+        import difflib
+        ref_name, ref_cfg = cfg_list[0]
+        ref_lines = ref_cfg.splitlines()
+        for other_name, other_cfg in cfg_list[1:]:
+            other_lines = other_cfg.splitlines()
+            diff = list(difflib.unified_diff(ref_lines, other_lines,
+                                             fromfile=ref_name, tofile=other_name, lineterm=''))
+            if diff:
+                config_diff += '\n'.join(diff) + '\n'
+        # Also diff any failed nodes against the reference
+        for name, cfg in configs.items():
+            if name == ref_name:
+                continue
+            if name not in [n for n, _ in cfg_list[1:]]:
+                config_diff += f"\n{name}: Config could not be read (node likely crashed)\n"
+
+    if not config_diff:
+        config_diff = "All node configs are identical.\n"
+
+    # Load config reference snippet
+    config_ref = _load_config_ref()
+
+    system_prompt = (
+        "You are an expert Aerospike database operations assistant specializing in Strong Consistency (SC) mode. "
+        "A cluster node has issues. Below you have:\n"
+        "1. CONFIG DIFF between nodes (MOST IMPORTANT — check this FIRST)\n"
+        "2. Per-node configs and important log lines\n"
+        "3. Diagnostics\n\n"
+        "CRITICAL INSTRUCTION: Your #1 priority is to check the CONFIG DIFF. "
+        "If any config parameter differs between the crashed/down node and healthy nodes, "
+        "that is almost certainly the root cause. Name the exact parameter and its values. "
+        "Log stack traces are symptoms — config differences are the cause.\n\n"
+        "In 3-5 concise sentences: state the root cause, the specific config change, and how to fix it. "
+        "Do NOT use markdown headings — just plain text with line breaks.\n\n"
+    )
+
+    system_prompt += f"=== CONFIG DIFF (check this FIRST) ===\n{config_diff}\n\n"
+
+    if diagnostics:
+        system_prompt += "=== Diagnostics ===\n" + '\n'.join(diagnostics) + "\n\n"
+    if warnings_list:
+        system_prompt += "=== Cluster Warnings ===\n" + '\n'.join(warnings_list[:10]) + "\n\n"
+
+    system_prompt += f"=== Per-Node Context ===\n{node_context}\n"
+
+    if config_ref:
+        system_prompt += f"\n=== Aerospike Config Reference (relevant SC params) ===\n{config_ref[:4000]}\n"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    payload = {
+        "contents": [
+            {"role": "user", "parts": [{"text": system_prompt + "\n\nAnalyze the issue and provide a clear explanation with fix steps."}]}
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 1024
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        answer = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "Could not generate analysis.")
+        )
+        return {"insight": answer}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.websocket("/ws/terminal/node/{container_name}")
+async def node_terminal_websocket(websocket: WebSocket, container_name: str):
+    """WebSocket endpoint for terminal sessions to a specific cluster node."""
+    await websocket.accept()
+
+    try:
+        check = subprocess.run(
+            ['docker', 'inspect', '--format', '{{.State.Running}}', container_name],
+            capture_output=True, text=True, timeout=3
+        )
+        if check.returncode != 0 or 'true' not in check.stdout.lower():
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "data": f"Container '{container_name}' is not running."
+            }))
+            await websocket.close()
+            return
+    except Exception:
+        pass
+
+    cmd = ['docker', 'exec', '-it', container_name, '/bin/bash']
+    process = create_pty_process(cmd)
+    if not process:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "data": "Failed to create terminal session."
+        }))
+        await websocket.close()
+        return
+
+    async def read_output():
+        try:
+            while True:
+                readable, _, _ = select.select([process.fd], [], [], 0.1)
+                if readable:
+                    try:
+                        data = process.read(4096)
+                        if data:
+                            await websocket.send_text(json.dumps({
+                                "type": "output",
+                                "data": data.decode('utf-8', errors='replace')
+                            }))
+                    except OSError:
+                        break
+                else:
+                    if process.poll() is not None:
+                        break
+                    await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    output_task = asyncio.create_task(read_output())
+
+    try:
+        while True:
+            message = await websocket.receive_text()
+            data = json.loads(message)
+            if data["type"] == "input":
+                try:
+                    process.write(data["data"].encode())
+                except (BrokenPipeError, OSError):
+                    break
+            elif data["type"] == "resize":
+                try:
+                    cols = data.get("cols", 80)
+                    rows = data.get("rows", 24)
+                    winsize = struct.pack('HHHH', rows, cols, 0, 0)
+                    fcntl.ioctl(process.fd, termios.TIOCSWINSZ, winsize)
+                except Exception:
+                    pass
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        output_task.cancel()
+        try:
+            process.terminate()
+            process.close()
+        except Exception:
+            pass
 
 
 # =============================================================================
@@ -3270,7 +3679,7 @@ terminal_manager = TerminalManager()
 async def terminal_websocket(websocket: WebSocket, terminal_type: str):
     """WebSocket endpoint for terminal sessions with PTY support."""
     await websocket.accept()
-    
+
     container = detect_container()
     if not container:
         await websocket.send_text(json.dumps({
@@ -3279,9 +3688,8 @@ async def terminal_websocket(websocket: WebSocket, terminal_type: str):
         }))
         await websocket.close()
         return
-    
-    # Create PTY process
     process = terminal_manager.create_terminal_sync(terminal_type, container)
+
     if not process:
         await websocket.send_text(json.dumps({
             "type": "error", 
@@ -3359,6 +3767,78 @@ import httpx
 GEMINI_API_KEY_FILE = os.path.join(os.path.dirname(BASE_DIR), ".gemini_api_key")
 
 DOCS_CONTENT: str | None = None
+CONFIG_REF_CONTENT: str | None = None
+
+# Sections/keywords from the config reference that are relevant to SC operations
+_CONFIG_REF_KEYWORDS = [
+    "strong-consistency", "roster", "replication-factor", "sc-replication",
+    "partition", "regime", "prefer-uniform-balance", "read-consistency",
+    "write-commit", "tomb-raider", "default-ttl", "nsup-period",
+    "data-in-memory", "data-in-index", "rack-id", "heartbeat",
+    "fabric", "mesh-seed-address-port", "cluster-name", "proto-fd-max",
+    "migrate", "transaction-pending-limit", "linearize-read",
+]
+
+
+def _load_config_ref() -> str:
+    """Load operationally-relevant sections from the Aerospike config reference."""
+    global CONFIG_REF_CONTENT
+    if CONFIG_REF_CONTENT is not None:
+        return CONFIG_REF_CONTENT
+
+    project_root = os.path.dirname(BASE_DIR)
+    ref_path = os.path.join(project_root, "aeropsikeconfigrefrence.md")
+    if not os.path.isfile(ref_path):
+        CONFIG_REF_CONTENT = ""
+        return CONFIG_REF_CONTENT
+
+    try:
+        lines = open(ref_path, encoding="utf-8", errors="replace").readlines()
+    except Exception:
+        CONFIG_REF_CONTENT = ""
+        return CONFIG_REF_CONTENT
+
+    # Extract parameter blocks (#### headings) that match relevant keywords.
+    # Keep only the summary (up to "Detail:" line) to stay concise.
+    relevant_blocks = []
+    current_block: list[str] = []
+    current_heading = ""
+    section_heading = ""
+
+    for line in lines:
+        if line.startswith("## ") and not line.startswith("###"):
+            section_heading = line.strip()
+        if line.startswith("#### "):
+            if current_block and _block_is_relevant(current_heading, current_block):
+                trimmed = _trim_block(current_block)
+                relevant_blocks.append(f"{section_heading}\n{trimmed}")
+            current_block = [line]
+            current_heading = line
+        elif current_block:
+            current_block.append(line)
+
+    if current_block and _block_is_relevant(current_heading, current_block):
+        trimmed = _trim_block(current_block)
+        relevant_blocks.append(f"{section_heading}\n{trimmed}")
+
+    CONFIG_REF_CONTENT = "\n---\n".join(relevant_blocks)
+    return CONFIG_REF_CONTENT
+
+
+def _block_is_relevant(heading: str, block: list[str]) -> bool:
+    text = heading.lower() + " " + " ".join(block[:15]).lower()
+    return any(kw in text for kw in _CONFIG_REF_KEYWORDS)
+
+
+def _trim_block(block: list[str]) -> str:
+    """Keep only heading through Default Value, skip verbose Detail section."""
+    trimmed = []
+    for line in block:
+        if line.strip().startswith("Detail:") or line.strip().startswith("Detail :"):
+            break
+        trimmed.append(line)
+    return "".join(trimmed).strip()
+
 
 def _load_docs() -> str:
     global DOCS_CONTENT
@@ -3370,7 +3850,6 @@ def _load_docs() -> str:
     for name in sorted(pathlib.Path(project_root).glob("strong-consistancydocs*.md")):
         parts.append(name.read_text(encoding="utf-8", errors="replace"))
 
-    # Include cluster config files so the AI knows the current setup
     config_files = [
         os.path.join(project_root, "aerolab-setup", "aerospike.conf"),
         os.path.join(project_root, "features.conf"),
@@ -3387,6 +3866,68 @@ def _load_docs() -> str:
 
     DOCS_CONTENT = "\n\n---\n\n".join(parts) if parts else ""
     return DOCS_CONTENT
+
+
+def _gather_live_cluster_context() -> str:
+    """Gather live config and recent logs from every running node."""
+    parts = []
+    try:
+        result = subprocess.run(
+            ['docker', 'ps', '--filter', 'name=aerolab-', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return ""
+        containers = [n.strip() for n in result.stdout.strip().split('\n') if n.strip()]
+    except Exception:
+        return ""
+
+    for cname in sorted(containers):
+        node_parts = [f"=== Node: {cname} ==="]
+
+        # Running config (namespace/test)
+        try:
+            ns = subprocess.run(
+                ['docker', 'exec', cname, 'asinfo', '-v', 'namespace/test'],
+                capture_output=True, text=True, timeout=5
+            )
+            if ns.returncode == 0:
+                node_parts.append(f"[namespace/test config]\n{ns.stdout.strip()}")
+        except Exception:
+            pass
+
+        # Roster info
+        try:
+            roster = subprocess.run(
+                ['docker', 'exec', cname, 'asinfo', '-v', 'roster:namespace=test'],
+                capture_output=True, text=True, timeout=5
+            )
+            if roster.returncode == 0:
+                node_parts.append(f"[roster]\n{roster.stdout.strip()}")
+        except Exception:
+            pass
+
+        # Recent warning/error log lines (last 60 lines filtered)
+        try:
+            logs = subprocess.run(
+                ['docker', 'exec', cname, 'tail', '-100', '/var/log/aerospike.log'],
+                capture_output=True, text=True, timeout=5
+            )
+            if logs.returncode == 0:
+                important = [
+                    ln.strip() for ln in logs.stdout.strip().split('\n')
+                    if any(w in ln for w in ('WARNING', 'FAILED', 'ERROR', 'partition', 'roster', 'recluster'))
+                ][-20:]
+                if important:
+                    node_parts.append("[recent important log lines]\n" + "\n".join(important))
+                else:
+                    node_parts.append("[logs] No warnings or errors in recent logs.")
+        except Exception:
+            pass
+
+        parts.append("\n".join(node_parts))
+
+    return "\n\n".join(parts)
 
 
 def _read_api_key() -> str | None:
@@ -3433,20 +3974,46 @@ async def chat(request: Request):
         return {"error": "Gemini API key not configured. Click the gear icon in the chat to set it up."}
 
     docs = _load_docs()
+    is_cluster_mgmt = "Cluster Management" in lesson_context
 
-    system_prompt = (
-        "You are an expert assistant for the Aerospike Strong Consistency (SC) tutorial. "
-        "Answer questions about Aerospike Strong Consistency using the reference documentation provided below. "
-        "The documentation also includes the current cluster configuration files (aerospike.conf and features.conf) "
-        "so you know exactly how the user's cluster is set up. Use this config context when relevant. "
-        "Be concise, accurate, and practical. Use code examples when helpful. "
-        "If the user's question relates to the current lesson, tailor your answer to that context.\n\n"
-    )
+    if is_cluster_mgmt:
+        system_prompt = (
+            "You are an expert Aerospike operations assistant helping a user manage their "
+            "Aerospike Strong Consistency (SC) cluster from the Cluster Management dashboard. "
+            "You have access to:\n"
+            "1. The SC tutorial documentation\n"
+            "2. The Aerospike configuration reference (relevant parameters only)\n"
+            "3. Live configuration, roster status, and recent logs from EVERY node in the cluster\n\n"
+            "Use this live cluster data to give precise, actionable answers. "
+            "When the user asks about errors, check the log lines provided. "
+            "When they ask about config changes, reference the config reference and the current values. "
+            "Provide exact commands (asinfo, asadm, aerolab) when helpful. "
+            "Be concise and operational.\n\n"
+        )
+        system_prompt += f"The user is on: {lesson_context}\n\n"
+        system_prompt += f"=== SC Tutorial Docs ===\n{docs}\n\n"
 
-    if lesson_context:
-        system_prompt += f"The user is currently viewing: {lesson_context}\n\n"
+        config_ref = _load_config_ref()
+        if config_ref:
+            system_prompt += f"=== Aerospike Config Reference (relevant params) ===\n{config_ref}\n\n"
 
-    system_prompt += f"=== Reference Documentation ===\n{docs}\n"
+        live_ctx = _gather_live_cluster_context()
+        if live_ctx:
+            system_prompt += f"=== Live Cluster State (per-node) ===\n{live_ctx}\n"
+    else:
+        system_prompt = (
+            "You are an expert assistant for the Aerospike Strong Consistency (SC) tutorial. "
+            "Answer questions about Aerospike Strong Consistency using the reference documentation provided below. "
+            "The documentation also includes the current cluster configuration files (aerospike.conf and features.conf) "
+            "so you know exactly how the user's cluster is set up. Use this config context when relevant. "
+            "Be concise, accurate, and practical. Use code examples when helpful. "
+            "If the user's question relates to the current lesson, tailor your answer to that context.\n\n"
+        )
+
+        if lesson_context:
+            system_prompt += f"The user is currently viewing: {lesson_context}\n\n"
+
+        system_prompt += f"=== Reference Documentation ===\n{docs}\n"
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     payload = {

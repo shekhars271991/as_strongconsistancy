@@ -340,7 +340,8 @@ const TERM_THEMES = {
         foreground: '#e6edf3',
         cursor: '#58a6ff',
         cursorAccent: '#0d1117',
-        selection: 'rgba(88, 166, 255, 0.3)',
+        selectionBackground: 'rgba(88, 166, 255, 0.3)',
+        selectionInactiveBackground: 'rgba(88, 166, 255, 0.15)',
         black: '#0d1117',
         red: '#f85149',
         green: '#3fb950',
@@ -363,7 +364,8 @@ const TERM_THEMES = {
         foreground: '#1f2328',
         cursor: '#0969da',
         cursorAccent: '#ffffff',
-        selection: 'rgba(9, 105, 218, 0.15)',
+        selectionBackground: 'rgba(9, 105, 218, 0.2)',
+        selectionInactiveBackground: 'rgba(9, 105, 218, 0.1)',
         black: '#1f2328',
         red: '#cf222e',
         green: '#1a7f37',
@@ -387,6 +389,56 @@ function getActiveTermTheme() {
     return document.documentElement.classList.contains('light') ? TERM_THEMES.light : TERM_THEMES.dark;
 }
 
+function sendTermResize(term, socket) {
+    if (socket && socket.readyState === WebSocket.OPEN && term) {
+        socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+}
+
+function fitAndResize() {
+    if (fitAddon) { fitAddon.fit(); sendTermResize(terminal, terminalSocket); }
+}
+
+function cmFitAndResize() {
+    if (cmFitAddon) { cmFitAddon.fit(); sendTermResize(cmTerminal, cmTerminalSocket); }
+}
+
+function enableTermCopyPaste(term, getSocket) {
+    // Auto-copy on selection (like iTerm / gnome-terminal)
+    term.onSelectionChange(() => {
+        const sel = term.getSelection();
+        if (sel) {
+            navigator.clipboard.writeText(sel).catch(() => {});
+        }
+    });
+
+    // Cmd/Ctrl+C: copy if selection exists, otherwise send SIGINT
+    // Cmd/Ctrl+V: paste from clipboard
+    term.attachCustomKeyEventHandler(ev => {
+        if (ev.type !== 'keydown') return true;
+        const isMac = navigator.platform.toUpperCase().includes('MAC');
+        const mod = isMac ? ev.metaKey : ev.ctrlKey;
+
+        if (mod && ev.key === 'c' && term.hasSelection()) {
+            navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+            term.clearSelection();
+            return false;
+        }
+        if (mod && ev.key === 'v') {
+            navigator.clipboard.readText().then(text => {
+                if (text) {
+                    const ws = getSocket();
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'input', data: text }));
+                    }
+                }
+            }).catch(() => {});
+            return false;
+        }
+        return true;
+    });
+}
+
 function initTerminal() {
     terminal = new Terminal({
         theme: getActiveTermTheme(),
@@ -399,27 +451,24 @@ function initTerminal() {
         scrollback: 1000,
         tabStopWidth: 8,
         convertEol: true,
-        cols: 120,
-        rows: 20
+        allowProposedApi: true
     });
     
     fitAddon = new window.FitAddon.FitAddon();
     terminal.loadAddon(fitAddon);
     
     terminal.open(document.getElementById('terminal'));
+    try { terminal.loadAddon(new window.WebglAddon.WebglAddon()); } catch(e) { console.warn('WebGL addon failed, using DOM renderer:', e); }
+    enableTermCopyPaste(terminal, () => terminalSocket);
     
     // Fit terminal after a short delay to ensure container is sized
-    setTimeout(() => {
-        fitAddon.fit();
-    }, 100);
+    setTimeout(fitAndResize, 100);
     
     // Handle window resize with debounce
     let resizeTimeout;
     window.addEventListener('resize', () => {
         clearTimeout(resizeTimeout);
-        resizeTimeout = setTimeout(() => {
-            fitAddon.fit();
-        }, 100);
+        resizeTimeout = setTimeout(fitAndResize, 100);
     });
     
     // Connect to terminal
@@ -435,6 +484,11 @@ function initTerminal() {
         }
     });
     
+    // Copy terminal button
+    document.getElementById('copy-terminal').addEventListener('click', function() {
+        copyTerminalContent(terminal, this);
+    });
+
     // Clear terminal button
     document.getElementById('clear-terminal').addEventListener('click', () => {
         terminal.clear();
@@ -469,7 +523,7 @@ function initTerminal() {
             // Refit and focus terminal when maximized
             if (!isMinimized) {
                 setTimeout(() => {
-                    if (fitAddon) fitAddon.fit();
+                    fitAndResize();
                     if (terminal) terminal.focus();
                 }, 100);
             }
@@ -512,7 +566,7 @@ function initTerminalTabs() {
             
             // Refit and focus terminal after tab switch
             setTimeout(() => {
-                if (fitAddon) fitAddon.fit();
+                fitAndResize();
                 if (terminal) terminal.focus();
             }, 50);
         });
@@ -540,6 +594,7 @@ function connectTerminal(type) {
         updateTerminalStatus('connected');
         terminal.clear();
         terminal.focus();
+        fitAndResize();
     };
     
     terminalSocket.onmessage = (event) => {
@@ -579,7 +634,9 @@ function updateTerminalStatus(status) {
     switch(status) {
         case 'connected':
             dot.classList.add('connected');
-            text.textContent = `Connected to ${currentTerminalType.toUpperCase()}`;
+            text.textContent = currentTerminalType === 'bash'
+                ? 'Local Terminal'
+                : `Connected to ${currentTerminalType.toUpperCase()}`;
             break;
         case 'disconnected':
             dot.classList.add('disconnected');
@@ -1105,11 +1162,6 @@ async function checkClusterStatus() {
     }
 }
 
-
-function closeScaleModal() {
-    document.getElementById('scale-modal').style.display = 'none';
-}
-
 // Handle node count dropdown change
 function onNodeCountChange(currentNodes, hasCluster) {
     const select = document.getElementById('node-count');
@@ -1145,62 +1197,68 @@ function scaleFromDropdown(currentNodes) {
 // =============================================================================
 
 let cmCurrentNodes = 0;
+let cmTerminal = null;
+let cmTerminalSocket = null;
+let cmFitAddon = null;
+let cmSelectedNode = null;
+let cmLogViewNode = null;
 
 function openClusterManagement(currentNodes = null, targetNodes = null) {
     const view = document.getElementById('cluster-management-view');
     const appContainer = document.querySelector('.app-container');
-    
-    // Fetch current cluster status first
-    fetch('/api/cluster/status')
-        .then(res => res.json())
-        .then(data => {
+    const overlay = document.getElementById('cm-loading-overlay');
+
+    overlay.style.display = 'flex';
+
+    Promise.all([
+        fetch('/api/cluster/status').then(r => r.json()),
+        fetch('/api/cluster/nodes').then(r => r.json())
+    ]).then(([data, nodesData]) => {
+            const nodes = nodesData.nodes || [];
             cmCurrentNodes = parseInt(data.cluster_size) || parseInt(data.ns_cluster_size) || 0;
-            
-            // Update info cards
+
             document.getElementById('cm-current-nodes').textContent = cmCurrentNodes || '-';
             document.getElementById('cm-sc-mode').textContent = data.strong_consistency ? 'Enabled' : 'Disabled';
             document.getElementById('cm-sc-mode').className = 'cm-info-value ' + (data.strong_consistency ? 'success' : 'warning');
             document.getElementById('cm-rf').textContent = data.replication_factor || '-';
-            
-            const hasDiagnostics = data.diagnostics && data.diagnostics.length > 0;
-            const hasWarnings = data.warnings && data.warnings.length > 0;
-            const isHealthy = data.dead_partitions === 0 && data.unavailable_partitions === 0 && !hasDiagnostics;
+
+            const offlineNodes = nodes.filter(n => n.status !== 'online');
+            const deadPartitions = parseInt(data.dead_partitions) || 0;
+            const unavailPartitions = parseInt(data.unavailable_partitions) || 0;
+            const clusterMismatch = data.aerospike_cluster_size && data.container_count &&
+                                    parseInt(data.aerospike_cluster_size) < parseInt(data.container_count);
+            const isHealthy = offlineNodes.length === 0 && deadPartitions === 0 &&
+                              unavailPartitions === 0 && !clusterMismatch;
+
             document.getElementById('cm-health').textContent = isHealthy ? 'Healthy' : 'Issues';
             document.getElementById('cm-health').className = 'cm-info-value ' + (isHealthy ? 'success' : 'error');
-            
-            // Show diagnostics and warnings in the logs panel
-            const logsEl = document.getElementById('cm-logs');
-            let logContent = 'Cluster management ready. Select target nodes and click "Scale Cluster" to begin.\n\n';
-            
-            if (hasDiagnostics) {
-                logContent += '⚠ DIAGNOSTICS\n';
-                logContent += '─'.repeat(50) + '\n';
-                data.diagnostics.forEach(d => { logContent += `  • ${d}\n`; });
-                logContent += '\n';
+
+            const healthBanner = document.getElementById('cm-health-banner');
+            if (!isHealthy) {
+                healthBanner.style.display = 'flex';
+                document.getElementById('cm-health-banner-content').innerHTML = '<em>Analyzing cluster health...</em>';
+                if (offlineNodes.length > 0) {
+                    const offlineNames = offlineNodes.map(n => n.container).join(', ');
+                    data.diagnostics = data.diagnostics || [];
+                    data.diagnostics.push(`Aerospike process is DOWN on: ${offlineNames}`);
+                }
+                getHealthInsight(data);
+            } else {
+                healthBanner.style.display = 'none';
             }
-            
-            if (hasWarnings) {
-                logContent += '⚠ RECENT WARNINGS FROM AEROSPIKE LOGS\n';
-                logContent += '─'.repeat(50) + '\n';
-                data.warnings.forEach(w => { logContent += `  ${w}\n`; });
-                logContent += '\n';
-            }
-            
-            if (!hasDiagnostics && !hasWarnings) {
-                logContent += 'No issues detected. Cluster is healthy.\n';
-            }
-            
-            logsEl.textContent = logContent;
-            
-            // Set target node dropdown
+
             const targetSelect = document.getElementById('cm-target-nodes');
             targetSelect.value = targetNodes || cmCurrentNodes || 2;
-            
-            // Show view
+
             view.style.display = 'flex';
             appContainer.style.display = 'none';
-            
-            // If target was provided, start scaling immediately
+            overlay.style.display = 'none';
+
+            if (!cmTerminal) initCmTerminal();
+            setTimeout(cmFitAndResize, 200);
+
+            renderNodes(nodes);
+
             if (targetNodes && targetNodes !== cmCurrentNodes) {
                 setTimeout(() => startScaling(), 100);
             }
@@ -1209,68 +1267,515 @@ function openClusterManagement(currentNodes = null, targetNodes = null) {
             console.error('Failed to fetch cluster status:', err);
             view.style.display = 'flex';
             appContainer.style.display = 'none';
+            overlay.style.display = 'none';
+            if (!cmTerminal) initCmTerminal();
+            refreshNodes();
         });
 }
 
 function closeClusterManagement() {
     const view = document.getElementById('cluster-management-view');
     const appContainer = document.querySelector('.app-container');
-    
+
+    // Disconnect CM terminal
+    if (cmTerminalSocket) {
+        cmTerminalSocket.close();
+        cmTerminalSocket = null;
+    }
+
     view.style.display = 'none';
     appContainer.style.display = 'flex';
-    
-    // Refresh cluster status
+
     checkClusterStatus();
+    setTimeout(fitAndResize, 100);
+}
+
+// ---- CM Terminal ----
+
+function initCmTerminal() {
+    cmTerminal = new Terminal({
+        theme: getActiveTermTheme(),
+        fontFamily: '"IBM Plex Mono", Consolas, monospace',
+        fontSize: 13,
+        lineHeight: 1.35,
+        cursorBlink: true,
+        cursorStyle: 'bar',
+        scrollback: 1000,
+        convertEol: true,
+        allowProposedApi: true
+    });
+
+    cmFitAddon = new window.FitAddon.FitAddon();
+    cmTerminal.loadAddon(cmFitAddon);
+    cmTerminal.open(document.getElementById('cm-terminal'));
+    try { cmTerminal.loadAddon(new window.WebglAddon.WebglAddon()); } catch(e) { console.warn('WebGL addon failed for CM terminal:', e); }
+    enableTermCopyPaste(cmTerminal, () => cmTerminalSocket);
+
+    setTimeout(cmFitAndResize, 100);
+
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(cmFitAndResize, 100);
+    });
+
+    cmTerminal.onData(data => {
+        if (cmTerminalSocket && cmTerminalSocket.readyState === WebSocket.OPEN) {
+            cmTerminalSocket.send(JSON.stringify({ type: 'input', data: data }));
+        }
+    });
+
+    cmTerminal.write('\x1b[2m Select a node above to open a terminal session \x1b[0m');
+
+    document.getElementById('cm-copy-terminal').addEventListener('click', function() {
+        copyTerminalContent(cmTerminal, this);
+    });
+    document.getElementById('cm-clear-terminal').addEventListener('click', () => {
+        cmTerminal.clear();
+    });
+}
+
+function connectCmTerminal(containerName) {
+    if (cmTerminalSocket) cmTerminalSocket.close();
+
+    cmTerminal.clear();
+    cmTerminal.writeln(`\x1b[36mConnecting to ${containerName}...\x1b[0m`);
+
+    const statusEl = document.getElementById('cm-terminal-status');
+    statusEl.querySelector('.status-dot').className = 'status-dot';
+    statusEl.querySelector('.status-text').textContent = 'Connecting...';
+
+    updateTabNodeLabel();
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    cmTerminalSocket = new WebSocket(`${protocol}//${window.location.host}/ws/terminal/node/${containerName}`);
+
+    cmTerminalSocket.onopen = () => {
+        cmTerminal.clear();
+        cmTerminal.focus();
+        cmFitAndResize();
+        statusEl.querySelector('.status-dot').className = 'status-dot connected';
+        statusEl.querySelector('.status-text').textContent = `Connected to ${containerName}`;
+    };
+
+    cmTerminalSocket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'output') {
+            cmTerminal.write(msg.data);
+        } else if (msg.type === 'error') {
+            cmTerminal.writeln(`\r\n\x1b[31m${msg.data}\x1b[0m`);
+        }
+    };
+
+    cmTerminalSocket.onclose = () => {
+        statusEl.querySelector('.status-dot').className = 'status-dot disconnected';
+        statusEl.querySelector('.status-text').textContent = 'Disconnected';
+    };
+
+    cmTerminalSocket.onerror = () => {
+        statusEl.querySelector('.status-dot').className = 'status-dot disconnected';
+        statusEl.querySelector('.status-text').textContent = 'Connection error';
+    };
+}
+
+function clearCmTerminal() { if (cmTerminal) cmTerminal.clear(); }
+
+function copyTerminalContent(term, btnEl) {
+    if (!term) return;
+    term.selectAll();
+    const text = term.getSelection();
+    term.clearSelection();
+    if (text) {
+        navigator.clipboard.writeText(text).then(() => {
+            const orig = btnEl.innerHTML;
+            btnEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+            setTimeout(() => { btnEl.innerHTML = orig; }, 1500);
+        }).catch(() => {});
+    }
+}
+
+function toggleCmTerminal() {
+    switchCmTab('terminal');
+    setTimeout(() => {
+        cmFitAndResize();
+        if (cmTerminal) cmTerminal.focus();
+    }, 100);
+}
+
+// ---- Nodes ----
+
+async function refreshNodes() {
+    const grid = document.getElementById('cm-nodes-grid');
+    grid.innerHTML = '<div class="cm-nodes-loading">Loading nodes...</div>';
+
+    try {
+        const resp = await fetch('/api/cluster/nodes');
+        const data = await resp.json();
+        const nodes = data.nodes || [];
+        renderNodes(nodes);
+    } catch (err) {
+        grid.innerHTML = '<div class="cm-nodes-loading">Failed to load nodes</div>';
+    }
+}
+
+async function refreshClusterHealth() {
+    try {
+        const [statusResp, nodesResp] = await Promise.all([
+            fetch('/api/cluster/status'),
+            fetch('/api/cluster/nodes')
+        ]);
+        const data = await statusResp.json();
+        const nodesData = await nodesResp.json();
+        const nodes = nodesData.nodes || [];
+
+        cmCurrentNodes = parseInt(data.cluster_size) || parseInt(data.ns_cluster_size) || 0;
+
+        document.getElementById('cm-current-nodes').textContent = cmCurrentNodes || '-';
+        document.getElementById('cm-sc-mode').textContent = data.strong_consistency ? 'Enabled' : 'Disabled';
+        document.getElementById('cm-sc-mode').className = 'cm-info-value ' + (data.strong_consistency ? 'success' : 'warning');
+        document.getElementById('cm-rf').textContent = data.replication_factor || '-';
+
+        const offlineNodes = nodes.filter(n => n.status !== 'online');
+        const hasDiagnostics = data.diagnostics && data.diagnostics.length > 0;
+        const deadPartitions = parseInt(data.dead_partitions) || 0;
+        const unavailPartitions = parseInt(data.unavailable_partitions) || 0;
+        const clusterMismatch = data.aerospike_cluster_size && data.container_count &&
+                                parseInt(data.aerospike_cluster_size) < parseInt(data.container_count);
+        const isHealthy = offlineNodes.length === 0 && deadPartitions === 0 &&
+                          unavailPartitions === 0 && !clusterMismatch;
+
+        document.getElementById('cm-health').textContent = isHealthy ? 'Healthy' : 'Issues';
+        document.getElementById('cm-health').className = 'cm-info-value ' + (isHealthy ? 'success' : 'error');
+
+        const healthBanner = document.getElementById('cm-health-banner');
+        if (!isHealthy) {
+            healthBanner.style.display = 'flex';
+            document.getElementById('cm-health-banner-content').innerHTML = '<em>Analyzing cluster health...</em>';
+            if (offlineNodes.length > 0) {
+                const offlineNames = offlineNodes.map(n => n.container).join(', ');
+                data.diagnostics = data.diagnostics || [];
+                data.diagnostics.push(`Aerospike process is DOWN on: ${offlineNames}`);
+            }
+            getHealthInsight(data);
+        } else {
+            healthBanner.style.display = 'none';
+        }
+
+        renderNodes(nodes);
+    } catch (err) {
+        console.error('Failed to refresh cluster health:', err);
+    }
+}
+
+function renderNodes(nodes) {
+    const grid = document.getElementById('cm-nodes-grid');
+    if (!nodes.length) {
+        grid.innerHTML = '<div class="cm-nodes-loading">No nodes found. Set up a cluster first.</div>';
+        return;
+    }
+
+    grid.innerHTML = '';
+    nodes.forEach(node => {
+        const card = document.createElement('div');
+        card.className = 'cm-node-card' + (node.status !== 'online' ? ' offline' : '') +
+                         (cmSelectedNode === node.container ? ' selected' : '');
+        card.onclick = (e) => {
+            if (e.target.closest('.cm-node-action-btn')) return;
+            selectNode(node.container);
+        };
+
+        card.innerHTML = `
+            <div class="cm-node-top">
+                <div class="cm-node-status ${node.status === 'online' ? '' : 'offline'}"></div>
+                ${node.is_principal ? '<span class="cm-node-badge principal">Principal</span>' : ''}
+            </div>
+            <div class="cm-node-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/>
+                    <circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="18" r="1" fill="currentColor"/>
+                    <line x1="10" y1="6" x2="18" y2="6" stroke-width="1"/><line x1="10" y1="18" x2="18" y2="18" stroke-width="1"/>
+                </svg>
+            </div>
+            <div class="cm-node-name">Node ${node.node_num}</div>
+            <div class="cm-node-container-name">${node.container}</div>
+            <div class="cm-node-ip">${node.ip || 'No IP'}</div>
+            <div class="cm-node-actions">
+                <button class="cm-node-action-btn" onclick="selectNode('${node.container}')" title="Open terminal">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    Terminal
+                </button>
+                <button class="cm-node-action-btn" onclick="openConfigEditor('${node.container}')" title="Edit config">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    Config
+                </button>
+                <button class="cm-node-action-btn" onclick="viewNodeLogs('${node.container}')" title="View logs">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    Logs
+                </button>
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+}
+
+// ---- Health Insight (AI) ----
+
+let _healthInsightInFlight = false;
+
+async function getHealthInsight(statusData) {
+    if (_healthInsightInFlight) return;
+
+    const banner = document.getElementById('cm-health-banner-content');
+    const diagnostics = statusData.diagnostics || [];
+    const warnings = statusData.warnings || [];
+
+    if (!diagnostics.length && !warnings.length &&
+        !statusData.dead_partitions && !statusData.unavailable_partitions) {
+        banner.innerHTML = 'Health issues detected but no details available.';
+        return;
+    }
+
+    _healthInsightInFlight = true;
+    try {
+        const resp = await fetch('/api/cluster/health-insight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ diagnostics, warnings })
+        });
+        const data = await resp.json();
+        const healthBanner = document.getElementById('cm-health-banner');
+        if (healthBanner.style.display === 'none') return;
+        if (data.insight) {
+            banner.innerHTML = '<strong>AI Insight:</strong> ' + data.insight.replace(/\n/g, '<br>');
+        } else if (data.error) {
+            banner.innerHTML = '<strong>Issues:</strong> ' + diagnostics.join(' · ');
+        }
+    } catch (err) {
+        banner.innerHTML = '<strong>Issues:</strong> ' + diagnostics.join(' · ');
+    } finally {
+        _healthInsightInFlight = false;
+    }
+}
+
+// ---- Tab Switching ----
+
+let cmConfigNode = null;
+
+function switchCmTab(tab) {
+    document.querySelectorAll('.cm-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.querySelectorAll('.cm-tab-content').forEach(p => p.classList.remove('active'));
+    const panel = document.getElementById('cm-tab-' + tab);
+    if (panel) panel.classList.add('active');
+
+    if (tab === 'terminal' && cmFitAddon) {
+        setTimeout(cmFitAndResize, 50);
+    }
+}
+
+function updateTabNodeLabel() {
+    const label = document.getElementById('cm-tab-node-label');
+    if (label) label.textContent = cmSelectedNode || 'No node selected';
+}
+
+function selectNode(containerName) {
+    cmSelectedNode = containerName;
+    updateTabNodeLabel();
+
+    document.querySelectorAll('.cm-node-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.cm-node-card').forEach(c => {
+        const nameEl = c.querySelector('.cm-node-container-name');
+        if (nameEl && nameEl.textContent === containerName) c.classList.add('selected');
+    });
+
+    switchCmTab('terminal');
+    connectCmTerminal(containerName);
+}
+
+// ---- Node Logs (Logs tab) ----
+
+async function viewNodeLogs(containerName) {
+    cmLogViewNode = containerName;
+    cmSelectedNode = containerName;
+    updateTabNodeLabel();
+
+    document.querySelectorAll('.cm-node-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.cm-node-card').forEach(c => {
+        const nameEl = c.querySelector('.cm-node-container-name');
+        if (nameEl && nameEl.textContent === containerName) c.classList.add('selected');
+    });
+
+    const title = document.getElementById('cm-detail-title');
+    const logsEl = document.getElementById('cm-node-logs');
+
+    title.textContent = `Logs — ${containerName}`;
+    logsEl.textContent = 'Loading logs...';
+    switchCmTab('logs');
+
+    try {
+        const resp = await fetch(`/api/cluster/nodes/${containerName}/logs`);
+        const data = await resp.json();
+        logsEl.textContent = data.logs || 'No logs available.';
+        logsEl.scrollTop = logsEl.scrollHeight;
+    } catch (err) {
+        logsEl.textContent = 'Failed to load logs: ' + err.message;
+    }
+}
+
+function refreshNodeLogs() {
+    if (cmLogViewNode) viewNodeLogs(cmLogViewNode);
+}
+
+function closeNodeDetail() {
+    switchCmTab('terminal');
+}
+
+// ---- Config Editor (Config tab) ----
+
+async function openConfigEditor(containerName) {
+    cmConfigNode = containerName;
+    cmSelectedNode = containerName;
+    updateTabNodeLabel();
+
+    document.querySelectorAll('.cm-node-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.cm-node-card').forEach(c => {
+        const nameEl = c.querySelector('.cm-node-container-name');
+        if (nameEl && nameEl.textContent === containerName) c.classList.add('selected');
+    });
+
+    const title = document.getElementById('cm-config-title');
+    const textarea = document.getElementById('cm-config-textarea');
+    const status = document.getElementById('cm-config-status');
+
+    title.textContent = `aerospike.conf — ${containerName}`;
+    textarea.value = 'Loading config...';
+    textarea.disabled = true;
+    status.textContent = '';
+    status.className = 'cm-config-status';
+    switchCmTab('config');
+
+    try {
+        const resp = await fetch(`/api/cluster/nodes/${containerName}/config`);
+        const data = await resp.json();
+        textarea.value = data.config || '';
+        textarea.disabled = false;
+        if (data.error) {
+            status.textContent = 'Warning: ' + data.error;
+            status.className = 'cm-config-status error';
+        }
+    } catch (err) {
+        textarea.value = '';
+        status.textContent = 'Failed to load config: ' + err.message;
+        status.className = 'cm-config-status error';
+    }
+}
+
+async function saveNodeConfig() {
+    if (!cmConfigNode) return;
+    const textarea = document.getElementById('cm-config-textarea');
+    const status = document.getElementById('cm-config-status');
+    const saveBtn = document.getElementById('cm-config-save');
+    const saveBtnHtml = saveBtn.innerHTML;
+
+    const content = textarea.value;
+    if (!content.trim()) {
+        status.textContent = 'Config cannot be empty';
+        status.className = 'cm-config-status error';
+        return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+    status.textContent = 'Writing config to ' + cmConfigNode + '...';
+    status.className = 'cm-config-status';
+
+    try {
+        const saveResp = await fetch(`/api/cluster/nodes/${cmConfigNode}/config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config: content })
+        });
+        const saveData = await saveResp.json();
+
+        if (!saveData.success) {
+            status.textContent = 'Save failed: ' + (saveData.error || 'Unknown error');
+            status.className = 'cm-config-status error';
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = saveBtnHtml;
+            return;
+        }
+
+        status.textContent = 'Config saved. Restarting Aerospike on ' + cmConfigNode + '...';
+        status.className = 'cm-config-status';
+
+        const restartResp = await fetch(`/api/cluster/nodes/${cmConfigNode}/restart`, { method: 'POST' });
+        const restartData = await restartResp.json();
+
+        if (restartData.success) {
+            status.textContent = 'Config saved and Aerospike restarted on ' + cmConfigNode;
+            status.className = 'cm-config-status success';
+            setTimeout(() => { refreshNodes(); refreshClusterHealth(); }, 3000);
+        } else {
+            status.textContent = 'Config saved but restart failed: ' + (restartData.error || 'Unknown error');
+            status.className = 'cm-config-status error';
+        }
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'cm-config-status error';
+    }
+
+    saveBtn.disabled = false;
+    saveBtn.innerHTML = saveBtnHtml;
+}
+
+function closeConfigEditor() {
+    switchCmTab('terminal');
+}
+
+// ---- Operation Logs ----
+
+function toggleOpLogs() {
+    const logs = document.getElementById('cm-logs');
+    logs.style.display = logs.style.display === 'none' ? 'block' : 'none';
 }
 
 function clearLogs() {
-    const logsEl = document.getElementById('cm-logs');
-    logsEl.innerHTML = 'Logs cleared. Ready for next operation.\n';
+    document.getElementById('cm-logs').innerHTML = 'Logs cleared.\n';
 }
 
 function resetClusterManagement() {
-    // Reset UI state
     document.getElementById('cm-status-section').style.display = 'none';
-    document.getElementById('cm-actions').style.display = 'none';
     document.getElementById('cm-scale-btn').disabled = false;
-    
-    // Refresh cluster info
     openClusterManagement();
 }
 
 function startScaling() {
     if (isScaling) return;
-    
+
     const targetCount = parseInt(document.getElementById('cm-target-nodes').value);
     const fromCount = cmCurrentNodes;
-    
+
     if (targetCount === fromCount) {
         appendLog('Target node count is same as current. No scaling needed.');
         return;
     }
-    
-    // Update UI
+
     document.getElementById('cm-status-section').style.display = 'block';
     document.getElementById('cm-from-nodes').textContent = fromCount;
     document.getElementById('cm-to-nodes').textContent = targetCount;
     document.getElementById('cm-op-status').textContent = 'Connecting...';
     document.getElementById('cm-op-status').className = 'cm-op-status';
     document.getElementById('cm-scale-btn').disabled = true;
-    document.getElementById('cm-actions').style.display = 'none';
-    
-    // Clear and prepare logs
-    const logsEl = document.getElementById('cm-logs');
-    const direction = targetCount > fromCount ? 'UP' : 'DOWN';
-    logsEl.innerHTML = '';
+    // Show operation logs
+    document.getElementById('cm-logs').style.display = 'block';
+    document.getElementById('cm-logs').innerHTML = '';
     appendLog(`<span class="log-header">=== Cluster Scaling: ${fromCount} → ${targetCount} nodes ===</span>`);
     appendLog('');
-    
+
     isScaling = true;
-    
-    // Connect to WebSocket
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws/cluster/scale`);
-    
+
     ws.onopen = () => {
         ws.send(JSON.stringify({
             action: targetCount > fromCount ? 'scale_up' : 'scale_down',
@@ -1278,10 +1783,10 @@ function startScaling() {
             target_count: targetCount
         }));
     };
-    
+
     ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
-        
+
         if (msg.type === 'log') {
             appendLog(formatLogLine(msg.data));
         } else if (msg.type === 'status') {
@@ -1290,42 +1795,45 @@ function startScaling() {
             const statusEl = document.getElementById('cm-op-status');
             statusEl.textContent = msg.success ? 'Complete!' : 'Failed';
             statusEl.className = 'cm-op-status ' + (msg.success ? 'success' : 'error');
-            
-            document.getElementById('cm-actions').style.display = 'block';
             document.getElementById('cm-scale-btn').disabled = false;
-            
-            // Update the dot indicator
-            document.querySelector('.cm-logs-dot').classList.add('inactive');
-            
+
+            const dot = document.querySelector('.cm-logs-dot');
+            if (dot) dot.classList.add('inactive');
+
             isScaling = false;
-            
-            // Update cluster info
             cmCurrentNodes = targetCount;
             document.getElementById('cm-current-nodes').textContent = targetCount;
-            
+
             if (msg.success) {
                 appendLog('');
                 appendLog('<span class="log-success">✓ Scaling operation completed successfully!</span>');
+                setTimeout(() => {
+                    refreshNodes();
+                    refreshClusterHealth();
+                    // Hide operation status and logs after a moment
+                    setTimeout(() => {
+                        document.getElementById('cm-status-section').style.display = 'none';
+                        document.getElementById('cm-logs').style.display = 'none';
+                    }, 3000);
+                }, 2000);
             } else {
                 appendLog('');
                 appendLog(`<span class="log-error">✗ Scaling failed: ${msg.message || 'Unknown error'}</span>`);
             }
         }
     };
-    
+
     ws.onerror = () => {
         document.getElementById('cm-op-status').textContent = 'Connection error';
         document.getElementById('cm-op-status').className = 'cm-op-status error';
-        document.getElementById('cm-actions').style.display = 'block';
         document.getElementById('cm-scale-btn').disabled = false;
         isScaling = false;
         appendLog('<span class="log-error">WebSocket connection error</span>');
     };
-    
+
     ws.onclose = () => {
         if (isScaling) {
             document.getElementById('cm-op-status').textContent = 'Disconnected';
-            document.getElementById('cm-actions').style.display = 'block';
             document.getElementById('cm-scale-btn').disabled = false;
             isScaling = false;
         }
@@ -1339,46 +1847,25 @@ function appendLog(line) {
 }
 
 function formatLogLine(line) {
-    // Escape HTML
     let escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    
-    // Highlight step markers
-    if (escaped.match(/^Step \d+:/i)) {
-        return `<span class="log-step">${escaped}</span>`;
-    }
-    
-    // Highlight commands (lines starting with $)
-    if (escaped.startsWith('$')) {
-        return `<span class="log-cmd">${escaped}</span>`;
-    }
-    
-    // Highlight success messages
-    if (escaped.toLowerCase().includes('done') || 
-        escaped.toLowerCase().includes('success') || 
-        escaped.toLowerCase().includes('complete') ||
-        escaped.toLowerCase().includes('stable')) {
+
+    if (escaped.match(/^Step \d+:/i)) return `<span class="log-step">${escaped}</span>`;
+    if (escaped.startsWith('$')) return `<span class="log-cmd">${escaped}</span>`;
+    if (escaped.toLowerCase().includes('done') || escaped.toLowerCase().includes('success') ||
+        escaped.toLowerCase().includes('complete') || escaped.toLowerCase().includes('stable'))
         return `<span class="log-success">${escaped}</span>`;
-    }
-    
-    // Highlight errors/warnings
-    if (escaped.toLowerCase().includes('error') || escaped.toLowerCase().includes('failed')) {
+    if (escaped.toLowerCase().includes('error') || escaped.toLowerCase().includes('failed'))
         return `<span class="log-error">${escaped}</span>`;
-    }
-    if (escaped.toLowerCase().includes('warning') || escaped.toLowerCase().includes('warn')) {
+    if (escaped.toLowerCase().includes('warning') || escaped.toLowerCase().includes('warn'))
         return `<span class="log-warning">${escaped}</span>`;
-    }
-    
-    // Highlight section headers (=== ... ===)
-    if (escaped.startsWith('===')) {
-        return `<span class="log-header">${escaped}</span>`;
-    }
-    
+    if (escaped.startsWith('===')) return `<span class="log-header">${escaped}</span>`;
+
     return escaped;
 }
 
-// Old modal functions for backwards compatibility
 function closeScaleModal() {
-    document.getElementById('scale-modal').style.display = 'none';
+    const el = document.getElementById('scale-modal');
+    if (el) el.style.display = 'none';
 }
 
 // =============================================================================
@@ -1436,7 +1923,7 @@ function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const collapsed = sidebar.classList.toggle('collapsed');
     localStorage.setItem('sc-sidebar', collapsed ? 'collapsed' : 'expanded');
-    setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 280);
+    setTimeout(fitAndResize, 280);
 }
 
 function toggleTheme() {
@@ -1453,6 +1940,9 @@ function toggleTheme() {
 
     if (terminal) {
         terminal.options.theme = getActiveTermTheme();
+    }
+    if (cmTerminal) {
+        cmTerminal.options.theme = getActiveTermTheme();
     }
 }
 
@@ -1473,14 +1963,12 @@ function toggleChat() {
         fab.classList.add('hidden');
         setTimeout(() => {
             document.getElementById('chat-input').focus();
-            if (fitAddon) fitAddon.fit();
         }, 280);
         checkApiKeyStatus();
     } else {
         sidebar.classList.remove('open');
         fab.classList.remove('hidden');
         closeChatSettings();
-        setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 280);
     }
 }
 
@@ -1496,6 +1984,12 @@ function clearChat() {
 }
 
 function getChatContext() {
+    const cmView = document.getElementById('cluster-management-view');
+    if (cmView && cmView.style.display !== 'none') {
+        let ctx = 'Cluster Management page (live configs + logs from all nodes)';
+        if (cmSelectedNode) ctx += ` — connected to ${cmSelectedNode}`;
+        return ctx;
+    }
     if (currentLesson >= 0 && currentLesson < LESSONS.length) {
         const l = LESSONS[currentLesson];
         return `Lesson ${l.id}: ${l.title}`;
@@ -1692,6 +2186,22 @@ const terminalOutputBuffer = [];
 const BUFFER_MAX = 80;
 let autoAnalyzeTimer = null;
 let lastAnalyzedSnippet = '';
+let autoAIEnabled = localStorage.getItem('autoAIEnabled') !== 'false';
+
+function toggleAutoAI() {
+    autoAIEnabled = !autoAIEnabled;
+    localStorage.setItem('autoAIEnabled', autoAIEnabled);
+    updateAutoAIButton();
+}
+
+function updateAutoAIButton() {
+    const btn = document.getElementById('auto-ai-toggle');
+    if (!btn) return;
+    btn.classList.toggle('active', autoAIEnabled);
+    btn.title = autoAIEnabled ? 'Auto-analysis ON — click to disable' : 'Auto-analysis OFF — click to enable';
+}
+// Initialize on load
+document.addEventListener('DOMContentLoaded', updateAutoAIButton);
 
 const ERROR_PATTERNS = [
     /Error:\s*\(-?\d+\)/i,
@@ -1727,7 +2237,8 @@ function captureTerminalLine(text) {
         terminalOutputBuffer.splice(0, terminalOutputBuffer.length - BUFFER_MAX);
     }
 
-    // Debounce: wait 1.5s of quiet before analyzing
+    if (!autoAIEnabled) return;
+
     clearTimeout(autoAnalyzeTimer);
     autoAnalyzeTimer = setTimeout(() => analyzeRecentOutput(), 1500);
 }
